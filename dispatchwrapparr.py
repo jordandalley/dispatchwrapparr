@@ -41,7 +41,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 
 log = logging.getLogger("dispatchwrapparr")
-__version__ = "1.4.6"
+__version__ = "1.4.7"
 
 def parse_args():
     # Initial wrapper arguments
@@ -523,7 +523,8 @@ class PlayRadio:
             if not playlist.segments:
                 return result
 
-            extinf = playlist.segments[0].title
+            # grab last segment
+            extinf = playlist.segments[-1].title
             matches = re.findall(r'(\w+)="([^"]+)"', extinf)
             seen = set()
             unique_values = [v for _, v in matches if not (v in seen or seen.add(v))]
