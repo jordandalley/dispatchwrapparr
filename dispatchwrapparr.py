@@ -4,7 +4,7 @@
 Dispatchwrapparr - A super wrapper for Dispatcharr
 
 Usage: dispatchwrapper.py -i <URL> -ua <User Agent String>
-Optional: -proxy <proxy server> -proxybypass <proxy bypass list> -clearkeys <json file/url> -cookies <txt file> -loglevel <level> -stream <selection> -subtitles -novariantcheck -novideo -noaudio
+Optional: -proxy <proxy server> -proxybypass <proxy bypass list> -clearkeys <json file/url> -cookies <txt file> -loglevel <level> -stream <selection> -subtitles -novariantcheck -novideo -noaudio -nosonginfo
 """
 
 from __future__ import annotations
@@ -20,7 +20,12 @@ import requests
 import fnmatch
 import json
 import subprocess
+import tempfile
+import hashlib
+import threading
+import time
 import http.cookiejar
+import m3u8
 from urllib.parse import urlparse, parse_qs
 from collections import defaultdict
 from contextlib import suppress, closing
@@ -36,7 +41,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 
 log = logging.getLogger("dispatchwrapparr")
-__version__ = "1.4.5"
+__version__ = "1.4.6"
 
 def parse_args():
     # Initial wrapper arguments
@@ -53,6 +58,7 @@ def parse_args():
     parser.add_argument("-novariantcheck", action="store_true", help="Optional: Do not autodetect if stream is audio-only or video-only")
     parser.add_argument("-novideo", action="store_true", help="Optional: Forces muxing of a blank video track into a stream that contains no audio")
     parser.add_argument("-noaudio", action="store_true", help="Optional: Forces muxing of a silent audio track into a stream that contains no video")
+    parser.add_argument("-nosonginfo", action="store_true", help="Optional: Disable song information during streaming radio plays")
     parser.add_argument("-loglevel", type=str, default="INFO", choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"], help="Enable logging and set log level. (default: INFO)")
     parser.add_argument("-v", "--version", action="version", version=f"Dispatchwrapparr {__version__}")
     args = parser.parse_args()
@@ -348,10 +354,13 @@ class DASHDRMStream(DASHStream):
 class PlayRadio:
     """
     A class that mimicks Streamlink stream.open() by using a file-like
-    object that wraps a radio stream through FFmpeg, muxing blank video in for use on TV's.
+    object that wraps a radio stream through FFmpeg, muxing blank video in or in
+    the case of available metadata, displays song information for use on TV's.
     """
-    def __init__(self, url, ffmpeg_loglevel, headers, cookies, resolution="320x180", fps=25, acodec="aac", vcodec="libx264"):
+
+    def __init__(self, url, ffmpeg_loglevel, headers, cookies, stream_type=None, resolution="854x480", fps=25, acodec="aac", vcodec="libx264", fontsize=22, update_interval=5):
         self.url = url
+        self.stream_type = stream_type
         self.ffmpeg_loglevel = ffmpeg_loglevel
         self.headers = headers or {}
         self.cookies = cookies or {}
@@ -359,7 +368,16 @@ class PlayRadio:
         self.fps = fps
         self.acodec = acodec
         self.vcodec = vcodec
+        self.fontsize = fontsize
+        self.update_interval = update_interval
         self.process = None
+        self.metafile = self.generate_temp_metafile()
+        self.session = requests.session()
+        self.session.headers.update(self.headers)
+        self.session.cookies.update(self.cookies)
+        # event to signal the metadata thread to stop
+        self._stop_metadata_thread = threading.Event()
+        self._metadata_thread = None
 
     def open(self):
         """
@@ -371,11 +389,11 @@ class PlayRadio:
             "-loglevel", self.ffmpeg_loglevel,
         ]
 
-        # Add headers
+        # add headers
         for k, v in self.headers.items():
             cmd.extend(["-headers", f"{k}: {v}"])
 
-        # Add cookies
+        # add cookies
         if self.cookies:
             cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
             cmd.extend(["-cookies", cookie_str])
@@ -383,7 +401,17 @@ class PlayRadio:
         cmd.extend([
             "-i", self.url,
             "-f", "lavfi",
-            "-i", f"color=size={self.resolution}:rate={self.fps}:color=black",
+            "-i", f"color=size={self.resolution}:rate={self.fps}:color=black"
+        ])
+
+        if self.stream_type:
+            log.info(f"Creating metadatafile at '{self.metafile}' for '{self.stream_type}' stream")
+            self._stop_metadata_thread.clear()
+            self._metadata_thread = threading.Thread(target=self.update_metadata, daemon=True)
+            self._metadata_thread.start()
+            cmd.extend(["-vf", f"drawtext=textfile={self.metafile}:reload=1:fontcolor=white:fontsize={self.fontsize}:x=(w-text_w)/2:y=(h-text_h)/2"])
+
+        cmd.extend([
             "-c:v", self.vcodec,
             "-c:a", self.acodec,
             "-f", "mpegts",
@@ -411,11 +439,106 @@ class PlayRadio:
             self.process.wait()
             self.process = None
 
+        if hasattr(self, "_metadata_thread") and self._metadata_thread is not None:
+            self._stop_metadata_thread.set()
+            self._metadata_thread.join()
+            self._metadata_thread = None
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    def generate_temp_metafile(self):
+        """
+        Creates a temp filename for writing out stream metadata
+        """
+        # create an md5 hash of the url
+        md5 = hashlib.md5(self.url.encode("utf-8")).hexdigest()
+        # use the system temp directory
+        temp_dir = tempfile.gettempdir()
+        # create full path
+        path = os.path.join(temp_dir, f"dw_playradio_{md5}.tmp")
+        # create/blank out temp file
+        open(path, "w").close()
+        # return the file for use
+        return path
+
+    def get_metadata(self):
+        """
+        Get metadata function for getting song information from HLS or ICY radio streams
+        """
+        # init result as none
+        result = None
+
+        if self.stream_type == "icy":
+            """
+            Get stream metadata for icy type streams
+            """
+            # result is blank by default
+            # update session headers
+            icy_headers = {
+                "User-Agent": "Lavf/61.7.100",
+                "Icy-MetaData": "1"
+            }
+            self.session.headers.update(icy_headers)
+            # get stream url
+            with self.session.get(self.url, stream=True) as resp:
+                # metadata interval which specifies when the metadata is inserted into the audio
+                resp.raise_for_status()
+                meta_int = int(resp.headers.get("icy-metaint", 0))
+                raw = resp.raw
+                # read data at meta_int
+                raw.read(meta_int)
+                # Read metadata length byte
+                length_byte = raw.read(1)
+                if length_byte:
+                    # check bytes
+                    meta_length = length_byte[0] * 16
+                    if meta_length > 0:
+                        # read metadata
+                        meta_data = raw.read(meta_length).strip(b'\0')
+                        if b"StreamTitle='" in meta_data:
+                           # split off the StreamTitle info
+                            result = meta_data.split(b"StreamTitle='")[1].split(b"';")[0].decode("utf-8", errors="ignore")
+
+        if self.stream_type == "hls":
+            """
+            Extract metadata from HLS streams (EXTINF) for the first segment.
+            """
+            result = None
+            with self.session.get(self.url, stream=True) as resp:
+                master = m3u8.loads(resp.text)
+                if master.is_variant:
+                    # choose highest bandwidth variant
+                    variant = max(master.playlists, key=lambda p: p.stream_info.bandwidth)
+                    # use existing requests session to pull variant
+                    with self.session.get(variant.absolute_uri, stream=True) as resp:
+                        # set playlist data
+                        playlist = m3u8.loads(resp.text)
+                else:
+                    playlist = master
+
+            if not playlist.segments:
+                return result
+
+            extinf = playlist.segments[0].title
+            matches = re.findall(r'(\w+)="([^"]+)"', extinf)
+            seen = set()
+            unique_values = [v for _, v in matches if not (v in seen or seen.add(v))]
+            result = "\n".join(unique_values)
+
+        # return any valid result
+        return result
+
+    def update_metadata(self):
+        while not self._stop_metadata_thread.is_set():
+            song = self.get_metadata()
+            if song:
+                with open(self.metafile, "w") as f:
+                    f.write(song)
+            time.sleep(self.update_interval)
 
 def load_cookies(cookiejar_path: str):
     """
@@ -896,7 +1019,13 @@ def main():
 
     elif not dw_opts.noaudio and dw_opts.novideo and not dw_opts.clearkey:
         log.info("No Video: Muxing blank video into supplied audio stream")
-        stream = PlayRadio(url, dw_opts.ffmpeg_loglevel, headers=None, cookies=None)
+        stream_type = None
+        if dw_opts.nosonginfo is False:
+            if isinstance(stream, HLSStream):
+                stream_type = "hls"
+            elif isinstance(stream, HTTPStream):
+                stream_type = "icy"
+        stream = PlayRadio(url, dw_opts.ffmpeg_loglevel, headers=None, cookies=None, stream_type=stream_type)
 
     elif dw_opts.noaudio and dw_opts.novideo:
         log.warning("Both 'noaudio' and 'novideo' specified. Ignoring both.")

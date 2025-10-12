@@ -13,6 +13,7 @@
 ✅ **Custom Header Support** — Currently supports the 'Referer' and 'Origin' headers by appending `#referer=<URL>` or `#origin=<URL>` (or both) fragments to the end of the URL\
 ✅ **Cookie Jar Support** — Supports loading of cookie jar txt files in Netscape/Mozilla format\
 ✅ **Extended Stream Type Detection** — Fallback option that checks MIME type of stream URL for streamlink plugin selection\
+✅ **Streaming Radio Support with Song Information** — Play streaming radio to your TV with song information displayed on your screen for ICY and HLS stream types\
 ✅ **Automated Stream Variant Detection** — Detects streams with no video or no audio and muxes in the missing components for compatibility with most players
 
 ---
@@ -123,6 +124,7 @@ Simply upload your m3u8 file into Dispatcharr, select a Dispatchwrapparr stream 
 | -novariantcheck | Optional |                                                           | Do not automatically detect audio-only or video-only streams and mux in blank video or silent audio for compatibility purposes. Just pass through the stream as-is (without video or audio). |
 | -noaudio        | Optional |                                                           | Disables variant checking (-novariantcheck) and manually specifies that the stream contains no audio. This instructs Dispatchwrapparr to mux in silent audio.                                |
 | -novideo        | Optional |                                                           | Disables variant checking (-novariantcheck) and manually specifies that the stream contains no video. This instructs Dispatchwrapparr to mux in blank video.                                 |
+| -nosonginfo     | Optional |                                                           | Disables the display of song information for radio streams. Only a blank video will be muxed                                                                                                 |
 | -loglevel       | Optional | `CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`, `NOTSET` | Sets the python and ffmpeg log levels. By default, the loglevel is set to 'INFO'                                                                                                             |
 | -subtitles      | Optional |                                                           | Enable muxing of subtitles. Disabled by default. NOTE: Subtitle support in streamlink is limited at best - this may not work as intended                                                     |
 
