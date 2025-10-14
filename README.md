@@ -107,17 +107,27 @@ More channels can be added to the same m3u8 file, and may also contain a mixture
 
 Simply upload your m3u8 file into Dispatcharr, select a Dispatchwrapparr stream profile, and it'll do the rest.
 
-### ▶️ Using the 'stream' URL fragment for mannual stream selection
+### ▶️ Using the 'stream' URL fragment for mannual stream variant/quality selection
 
-Sometimes there may be occasions where you may want to manually select various stream qualities. The #stream fragment tells dispatchwrapparr to pick the stream that you've selected.
+The `#stream` fragment allows you to manually select a stream variant. Sometimes there may be occasions where you may want to manually select various stream variants depending on your preferences.
 
-When first running any stream, the log output from dispatchwrapparr will display a list of available streams. To find a list of available qualities for a particular stream, simply run the following on the system running the dispatcharr docker container:
+To find a list of available variants for a particular stream, simply run the following on the system running the dispatcharr docker container:
 
 `docker logs dispatcharr -f --since 0m | grep 'Available streams'`
 
-Once you've started that, play the stream then check the logs. It should show you a list of what is available.
+Once this command is running, play the stream and look at the output of the above command. It should show you a list of what variants are available.
+
+Some examples of outputs are shown below:
 
 `2025-10-14 19:44:01,863 INFO ts_proxy.stream_manager FFmpeg info for channel 86952480-4c6b-4df1-a60b-306e28a43cb3: [dispatchwrapparr] 2025-10-14 19:44:01,860 [info] Available streams: 270p_alt, 270p, 360p_alt, 360p, 480p_alt, 480p, 720p_alt2, 720p_alt, 720p, 1080p_alt, 1080p, worst, best`
+
+`2025-10-14 19:58:25,926 INFO ts_proxy.stream_manager FFmpeg info for channel bda87427-1a81-43d0-8e3d-84b2cf3484b4: [dispatchwrapparr] 2025-10-14 19:58:25,926 [info] Available streams: 720p+a128k_48k, 720p+a128k_44k_alt, 720p+a128k_48k_alt2, 720p+a128k_44k_alt3, 540p+a128k_48k, 540p+a128k_44k_alt, 360p+a128k_48k, 360p+a128k_44k_alt, 270p+a128k_48k, 270p+a128k_44k_alt, best, worst`
+
+Once you have the stream you wish to use, eg. '1080p_alt', then all you need to do is append the fragment to the end of the stream URL as follows: `https://some.stream.com/playlist.m3u8#stream=1080p_alt`
+
+In instances where a stream variants contain special characters such as '+' like in the second example above, you will need to ensure that the URL is encoded correctly. The '+' character is '%2B'.
+
+For example, to select the '720p+a128k_48k' stream variant, then it would look like this: `https://some.stream.com/playlist.m3u8#stream=720p%2Ba128k_48k`
 
 ---
 
