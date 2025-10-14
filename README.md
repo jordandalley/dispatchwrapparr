@@ -107,7 +107,7 @@ More channels can be added to the same m3u8 file, and may also contain a mixture
 
 Simply upload your m3u8 file into Dispatcharr, select a Dispatchwrapparr stream profile, and it'll do the rest.
 
-### ▶️ Using the 'stream' URL fragment for mannual stream variant/quality selection
+### ▶️ Using the 'stream' URL fragment for manual stream variant/quality selection
 
 The `#stream` fragment allows you to manually select a stream variant. Sometimes there may be occasions where you may want to manually select various stream variants depending on your preferences.
 
