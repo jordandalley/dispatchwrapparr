@@ -107,6 +107,18 @@ More channels can be added to the same m3u8 file, and may also contain a mixture
 
 Simply upload your m3u8 file into Dispatcharr, select a Dispatchwrapparr stream profile, and it'll do the rest.
 
+### ▶️ Using the 'stream' URL fragment for mannual stream selection
+
+Sometimes there may be occasions where you may want to manually select various stream qualities. The #stream fragment tells dispatchwrapparr to pick the stream that you've selected.
+
+When first running any stream, the log output from dispatchwrapparr will display a list of available streams. To find a list of available qualities for a particular stream, simply run the following on the system running the dispatcharr docker container:
+
+`docker logs dispatcharr -f --since 0m | grep 'Available streams'`
+
+Once you've started that, play the stream then check the logs. It should show you a list of what is available.
+
+`2025-10-14 19:44:01,863 INFO ts_proxy.stream_manager FFmpeg info for channel 86952480-4c6b-4df1-a60b-306e28a43cb3: [dispatchwrapparr] 2025-10-14 19:44:01,860 [info] Available streams: 270p_alt, 270p, 360p_alt, 360p, 480p_alt, 480p, 720p_alt2, 720p_alt, 720p, 1080p_alt, 1080p, worst, best`
+
 ---
 
 ## ⚙️ CLI Arguments
