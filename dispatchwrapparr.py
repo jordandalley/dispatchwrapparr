@@ -41,7 +41,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 
 log = logging.getLogger("dispatchwrapparr")
-__version__ = "1.4.7"
+__version__ = "1.4.8"
 
 def parse_args():
     # Initial wrapper arguments
@@ -162,9 +162,10 @@ class FFMPEGDRMMuxer(FFMPEGMuxer):
 
 class DASHDRMStream(DASHStream):
     """
-    The original source for this class is from Streamlink's dash.py (20/09/2025)
+    This is effectively a hacked up version of the 'DASHStream' class from Streamlink's dash.py (20/09/2025)
     https://github.com/streamlink/streamlink/blob/94c964751be2b318cfcae6c4eb103aafaac6b75c/src/streamlink/stream/dash/dash.py
-    Modifications to the original include bypassing DRM checking. Any modifications can be found by looking for "DW-PATCH" in comments.
+    Modifications to the original include bypassing DRM checking and some more refined stream scoring logic which includes
+    weighting for video bitrate, audio bitrate and audio sample rate combos
     """
     @classmethod
     def parse_manifest(
@@ -177,7 +178,7 @@ class DASHDRMStream(DASHStream):
         **kwargs,
     ) -> dict[str, DASHStream]:
         """
-        Parse a DASH manifest file and return its streams.
+        Parse a DASH DRM manifest file and return its streams.
 
         :param session: Streamlink session instance
         :param url_or_manifest: URL of the manifest file or an XML manifest string
@@ -212,21 +213,6 @@ class DASHDRMStream(DASHStream):
             ) from None
 
         # Search for suitable video and audio representations
-        """
-        DW-PATCH
-        Remove DRM Checks
-
-        for aset in period_selection.adaptationSets:
-            if aset.contentProtections:
-                raise PluginError(f"{source} is protected by DRM")
-            for rep in aset.representations:
-                if rep.contentProtections:
-                    raise PluginError(f"{source} is protected by DRM")
-                if rep.mimeType.startswith("video"):
-                    video.append(rep)
-                elif rep.mimeType.startswith("audio"):  # pragma: no branch
-                    audio.append(rep)
-        """
 
         for aset in period_selection.adaptationSets:
             for rep in aset.representations:
@@ -265,54 +251,74 @@ class DASHDRMStream(DASHStream):
         if len(available_languages) > 1:
             audio = [a for a in audio if a and (a.lang is None or a.lang == lang)]
 
+        # determine unique audio sample rates
+        unique_sample_rates = {a.audioSamplingRate for a in audio if a and a.audioSamplingRate}
+
+        # generate candidate streams
         ret = []
         for vid, aud in itertools.product(video, audio):
             if not vid and not aud:
                 continue
 
-            """
-            DW-PATCH
-            Replace DASHStream with our own class wrapper
-
-            stream = DASHStream(session, mpd, vid, aud, **kwargs)
-            """
             stream = cls(session, mpd, vid, aud, **kwargs)
-            stream_name = []
+            stream_name_parts = []
 
+            # video part
             if vid:
-                stream_name.append(f"{vid.height or vid.bandwidth_rounded:0.0f}{'p' if vid.height else 'k'}")
+                stream_name_parts.append(f"{vid.height or round(vid.bandwidth_rounded)}{'p' if vid.height else 'k'}")
+
+            # audio part
             if aud and len(audio) > 1:
-                stream_name.append(f"a{aud.bandwidth:0.0f}k")
-            ret.append(("+".join(stream_name), stream))
+                sr_part = ""
+                if len(unique_sample_rates) > 1:
+                    sr_khz = round(aud.audioSamplingRate / 1000)
+                    sr_part = f"_{sr_khz}k"
+                stream_name_parts.append(f"a{round(aud.bandwidth)}k{sr_part}")
 
-        # rename duplicate streams
+            display_name = "+".join(stream_name_parts)
+
+            # group key excludes sample rate so sorting can pick best
+            group_key = f"{vid.height or round(vid.bandwidth_rounded)}{'p' if vid.height else 'k'}+a{round(aud.bandwidth)}k"
+            ret.append((group_key, display_name, stream))
+
+        # group streams by key
         dict_value_list = defaultdict(list)
-        for k, v in ret:
-            dict_value_list[k].append(v)
+        for key, display_name, stream in ret:
+            dict_value_list[key].append((display_name, stream))
 
-        def sortby_bandwidth(dash_stream: DASHStream) -> float:
-            if dash_stream.video_representation:
-                return dash_stream.video_representation.bandwidth
-            if dash_stream.audio_representation:
-                return dash_stream.audio_representation.bandwidth
-            return 0  # pragma: no cover
+        # sorting function: combine video + audio quality
+        def sortby_quality(dash_stream):
+            vid = dash_stream.video_representation
+            aud = dash_stream.audio_representation
 
+            video_score = int(vid.bandwidth or 0) if vid else 0
+            audio_score = 0
+            if aud:
+                audio_score = int(aud.bandwidth or 0) + (int(aud.audioSamplingRate or 0) // 1000) * 10
+
+            return video_score + audio_score
+
+        # sort within groups and assign _alt names
         ret_new = {}
-        for q in dict_value_list:
-            items = dict_value_list[q]
-
+        for key, items in dict_value_list.items():
             with suppress(AttributeError):
-                items = sorted(items, key=sortby_bandwidth, reverse=True)
+                items = sorted(items, key=lambda x: sortby_quality(x[1]), reverse=True)
 
-            for n in range(len(items)):
+            for n, (display_name, stream) in enumerate(items):
                 if n == 0:
-                    ret_new[q] = items[n]
+                    ret_new[display_name] = stream
                 elif n == 1:
-                    ret_new[f"{q}_alt"] = items[n]
+                    ret_new[f"{display_name}_alt"] = stream
                 else:
-                    ret_new[f"{q}_alt{n}"] = items[n]
+                    ret_new[f"{display_name}_alt{n}"] = stream
+
+        # final sort of overall best first
+        ret_new = dict(
+            sorted(ret_new.items(), key=lambda x: sortby_quality(x[1]), reverse=True)
+        )
 
         return ret_new
+
 
     def open(self):
         video, audio = None, None
@@ -328,21 +334,9 @@ class DASHDRMStream(DASHStream):
             audio = DASHStreamReader(self, rep_audio, timestamp)
             log.debug(f"Opening DASH reader for: {rep_audio.ident!r} - {rep_audio.mimeType}")
 
-        """
-        DW-PATCH
-        Change from FFMPEGMuxer.is_usable to FFMPEGDRMMuxer.is_usable
-
-        if video and audio and FFMPEGMuxer.is_usable(self.session):
-        """
         if video and audio and FFMPEGDRMMuxer.is_usable(self.session):
             video.open()
             audio.open()
-            """
-            DW-PATCH
-            Change from FFMPEGMuxer to FFMPEGDRMMuxer
-
-            return FFMPEGMuxer(self.session, video, audio, copyts=True).open()
-            """
             return FFMPEGDRMMuxer(self.session, video, audio, copyts=True).open()
         elif video:
             video.open()
@@ -975,6 +969,9 @@ def main():
     if not streams:
         log.error("No playable streams found.")
         return
+
+    # Send a list of available streams to log output
+    log.info(f"Available streams: {', '.join(streams.keys())}")
 
     """
     Select the best stream(s) from the list of streams
