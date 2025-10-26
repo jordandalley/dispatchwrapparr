@@ -41,7 +41,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 
 log = logging.getLogger("dispatchwrapparr")
-__version__ = "1.4.8"
+__version__ = "1.4.9"
 
 def parse_args():
     # Initial wrapper arguments
@@ -268,17 +268,26 @@ class DASHDRMStream(DASHStream):
                 stream_name_parts.append(f"{vid.height or round(vid.bandwidth_rounded)}{'p' if vid.height else 'k'}")
 
             # audio part
-            if aud and len(audio) > 1:
+            if aud:
                 sr_part = ""
-                if len(unique_sample_rates) > 1:
-                    sr_khz = round(aud.audioSamplingRate / 1000)
-                    sr_part = f"_{sr_khz}k"
+                if len(unique_sample_rates) > 1 and aud.audioSamplingRate:
+                   sr_khz = round(aud.audioSamplingRate / 1000)
+                   sr_part = f"_{sr_khz}k"
                 stream_name_parts.append(f"a{round(aud.bandwidth)}k{sr_part}")
 
             display_name = "+".join(stream_name_parts)
 
-            # group key excludes sample rate so sorting can pick best
-            group_key = f"{vid.height or round(vid.bandwidth_rounded)}{'p' if vid.height else 'k'}+a{round(aud.bandwidth)}k"
+            # Use safe defaults for group_key when either rep is missing
+            vid_bandwidth = int(getattr(vid, "bandwidth_rounded", getattr(vid, "bandwidth", 0)) or 0)
+            aud_bandwidth = int(getattr(aud, "bandwidth", 0) or 0)
+
+            if vid and not aud:
+                group_key = f"{vid.height or round(vid_bandwidth)}p"
+            elif aud and not vid:
+                group_key = f"a{round(aud_bandwidth)}k"
+            else:
+                group_key = f"{vid.height or round(vid_bandwidth)}p+a{round(aud_bandwidth)}k"
+
             ret.append((group_key, display_name, stream))
 
         # group streams by key
@@ -334,16 +343,17 @@ class DASHDRMStream(DASHStream):
             audio = DASHStreamReader(self, rep_audio, timestamp)
             log.debug(f"Opening DASH reader for: {rep_audio.ident!r} - {rep_audio.mimeType}")
 
+        # Always mux for DRM streams as ffmpeg does the decryption
         if video and audio and FFMPEGDRMMuxer.is_usable(self.session):
             video.open()
             audio.open()
             return FFMPEGDRMMuxer(self.session, video, audio, copyts=True).open()
         elif video:
             video.open()
-            return video
+            return FFMPEGDRMMuxer(self.session, video, copyts=True).open()
         elif audio:
             audio.open()
-            return audio
+            return FFMPEGDRMMuxer(self.session, audio, copyts=True).open()
 
 class PlayRadio:
     """
