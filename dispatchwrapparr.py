@@ -26,6 +26,7 @@ import threading
 import time
 import http.cookiejar
 import m3u8
+from datetime import timedelta
 from urllib.parse import urlparse, parse_qs
 from collections import defaultdict
 from contextlib import suppress, closing
@@ -40,8 +41,7 @@ from streamlink.session import Streamlink
 from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 
-log = logging.getLogger("dispatchwrapparr")
-__version__ = "1.4.9"
+__version__ = "1.5.0"
 
 def parse_args():
     # Initial wrapper arguments
@@ -138,9 +138,10 @@ class FFMPEGDRMMuxer(FFMPEGMuxer):
                 # Per input arguments
                 self._cmd.extend(["-decryption_key", keys[key]])
                 self._cmd.extend(["-re"])
-                self._cmd.extend(["-readrate_initial_burst", "6"])
+                self._cmd.extend(["-readrate_initial_burst", str(readrate_initial_burst)])
                 self._cmd.extend(["-copyts"])
                 self._cmd.extend(["-start_at_zero"])
+                self._cmd.extend(["-thread_queue_size", "512"])
                 key += 1
                 # If we had more streams than keys, start with the first
                 # audio key again
@@ -194,6 +195,15 @@ class DASHDRMStream(DASHStream):
             mpd = cls.parse_mpd(manifest, mpd_params)
         except Exception as err:
             raise PluginError(f"Failed to parse MPD manifest: {err}") from err
+
+        """
+        With DASH-DRM we're muxing using FFmpeg with a realtime readrate (-re) and an initial burst as defined
+        in the readrate_initial_burst global variable. The initial burst rate reads ahead instantly, so we
+        need to append the readrate_initial_burst to the suggested presentation delay provided in the DASH manifest.
+        """
+
+        mpd.suggestedPresentationDelay += timedelta(seconds=readrate_initial_burst)
+        log.debug(f"MPEG-DASH Adjusted Presentation Delay: {mpd.suggestedPresentationDelay}")
 
         source = mpd_params.get("url", "MPD manifest")
         video: list[Representation | None] = [None] if with_audio_only else []
@@ -403,8 +413,10 @@ class PlayRadio:
             cmd.extend(["-cookies", cookie_str])
 
         cmd.extend([
+            "-thread_queue_size", "512",
             "-i", self.url,
             "-f", "lavfi",
+            "-thread_queue_size", "512",
             "-i", f"color=size={self.resolution}:rate={self.fps}:color=black"
         ])
 
@@ -1047,21 +1059,48 @@ def main():
 
     try:
         log.info("Starting stream...")
+        # MPEG-TS packet size
+        PACKET_SIZE = 188
+        # Match Dispatcharr's read buffer size (12 KB)
+        READ_CHUNK = PACKET_SIZE * 64
+        # Write buffer size set to 192 KB to prevent flushing on every 12KB chunk
+        WRITE_BUFFER_SIZE = PACKET_SIZE * 1024
+
+        # Create a buffer
+        buffer = bytearray()
+
         with stream.open() as fd:
             while True:
-                data = fd.read(188 * 64) # Match buffer settings of Dispatcharr for optimal MPEG-TS buffering
+                data = fd.read(READ_CHUNK)
                 if not data:
                     break
-                try:
-                    sys.stdout.buffer.write(data)
-                    sys.stdout.buffer.flush()
-                except BrokenPipeError:
-                    break
+                buffer.extend(data)
+                # Flush whenever buffer exceeds WRITE_BUFFER_SIZE
+                if len(buffer) >= WRITE_BUFFER_SIZE:
+                    try:
+                        sys.stdout.buffer.write(buffer)
+                        sys.stdout.buffer.flush()
+                    except BrokenPipeError:
+                        break
+                    buffer.clear()
+
+        # Flush any remaining data
+        if buffer:
+            try:
+                sys.stdout.buffer.write(buffer)
+                sys.stdout.buffer.flush()
+            except BrokenPipeError:
+                pass
+
     except KeyboardInterrupt:
         log.info("Stream interrupted, canceling.")
 
 # Set default SIGPIPE behavior so dispatchwrapparr exits cleanly when the pipe is closed
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+# Establish logging
+log = logging.getLogger("dispatchwrapparr")
+# Initial burst for DASHDRM muxing (Default: 10s)
+readrate_initial_burst = int(10)
 
 if __name__ == "__main__":
     main()
