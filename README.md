@@ -47,49 +47,6 @@ To create profiles manually, Dispatchwrapparr is usually installed under `/data/
 
 ---
 
-## ‼️ Troubleshooting
-
-### Garbled/Green Video for DRM streams Dispatcharr builds 0.9.0-??
-
-There is currently an issue with decrypting DASHDRM streams since the release of Dispatcharr 0.9.0.
-
-Dispatcharr uses [docker-ffmpeg](https://github.com/linuxserver/docker-ffmpeg) as a build layer, which was recently updated to ffmpeg 8.0. The particular build of ffmpeg 8.0 used in docker-ffmpeg contains a bug which causes garbled/green video content.
-
-This bug has been fixed in subsequent builds of ffmpeg 8.0 but is not yet part of the main release.
-
-The solution at this stage is to download either an older or newer 'portable' ffmpeg binary and place it into the same directory as dispatchwrapparr.py. This is usually in `/data/dispatchwrapparr`.
-
-Some options are:
-
-- Jellyfin FFmpeg 7.0 Releases: Download the latest [jellyfin-ffmpeg_7.x_portable_linux64-gpl.tar.xz](https://github.com/jellyfin/jellyfin-ffmpeg/releases) release binaries
-- BtbN FFmpeg 8.0 Auto Builds: Download the latest [ffmpeg-master-latest-linux64-gpl.tar.xz](https://github.com/BtbN/FFmpeg-Builds/releases) auto-build binaries with bugfix applied
-
-### Out of Sync Audio or Streams stopping prematurely
-
-Different broadcasters use an array of different settings to deliver streaming content.
-
-If audio is out of sync, or streams are stopping prematurely (freezing), try the cli option `-ff_start_at_zero`.
-
-You may need to split this option off into its own Dispatcharr profile as it may affect other channels.
-
-### Jellyfin IPTV streaming issues
-
-In Jellyfin there are a number of settings related to m3u8 manifests.
-
-Make sure that all options ("Allow fMP4 transcoding container", "Allow stream sharing", "Auto-loop live streams", "Ignore DTS (decoding timestamp)", and "Read input at native frame rate") are unticked/disabled.
-
-### My streams stop on ad breaks, why?
-
-This is a technology called SCTE-35 (aka. SSAI or DAI) which is injects ads/commercial breaks into streams based on parameters such as geolocation and demographics etc.
-
-FFmpeg and pretty much all players balk at it, because instead of a continuous stream like players/ffmpeg expects, it's more like a playlist.
-
-When the TV channel gets to an ad break, the ads are inserted into the dash or hls manifest. In some cases, it switches from separate audio and video streams, to a single stream with an already muxed mp4 file containing audio and video.
-
-This makes it extremely difficult to work around. At this stage, it is not anticipated the Dispatchwrapparr will support SCTE-35, however it won't be ruled out in a future release.
-
----
-
 ## 🛞 URL Fragment Options
 
 URL fragment options can be used to tell Dispatchwrapparr what to do with a specific stream.
@@ -199,6 +156,49 @@ Below is an example of what Dispatchwrapparr expects in the json API response or
 - Wildcards/Globs (*) are supported by Dispatchwrapparr for URL -> Clearkey matching. (Eg. The URL string could look like this and still match a Clearkey `https://olsp.live.dash.c4assets.com/*/live/channel(c4)/*.mpd`)
 - Supports KID:KEY combinations, and comma delimited lists of clearkeys where multiple keys are required, although only the Clearkey is needed.
 - If `-clearkeys` is specified, and no stream URL matches a clearkey, Dispatchwrapparr will simply carry on as normal and treat the stream as if it's not DRM encrypted
+
+---
+
+## ‼️ Troubleshooting
+
+### Garbled/Green Video for DRM streams Dispatcharr builds 0.9.0-??
+
+There is currently an issue with decrypting DASHDRM streams since the release of Dispatcharr 0.9.0.
+
+Dispatcharr uses [docker-ffmpeg](https://github.com/linuxserver/docker-ffmpeg) as a build layer, which was recently updated to ffmpeg 8.0. The particular build of ffmpeg 8.0 used in docker-ffmpeg contains a bug which causes garbled/green video content.
+
+This bug has been fixed in subsequent builds of ffmpeg 8.0 but is not yet part of the main release.
+
+The solution at this stage is to download either an older or newer 'portable' ffmpeg binary and place it into the same directory as dispatchwrapparr.py. This is usually in `/data/dispatchwrapparr`.
+
+Some options are:
+
+- Jellyfin FFmpeg 7.0 Releases: Download the latest [jellyfin-ffmpeg_7.x_portable_linux64-gpl.tar.xz](https://github.com/jellyfin/jellyfin-ffmpeg/releases) release binaries
+- BtbN FFmpeg 8.0 Auto Builds: Download the latest [ffmpeg-master-latest-linux64-gpl.tar.xz](https://github.com/BtbN/FFmpeg-Builds/releases) auto-build binaries with bugfix applied
+
+### Out of Sync Audio or Streams stopping prematurely
+
+Different broadcasters use an array of different settings to deliver streaming content.
+
+If audio is out of sync, or streams are stopping prematurely (freezing), try the cli option `-ff_start_at_zero`.
+
+You may need to split this option off into its own Dispatcharr profile as it may affect other channels.
+
+### Jellyfin IPTV streaming issues
+
+In Jellyfin there are a number of settings related to m3u8 manifests.
+
+Make sure that all options ("Allow fMP4 transcoding container", "Allow stream sharing", "Auto-loop live streams", "Ignore DTS (decoding timestamp)", and "Read input at native frame rate") are unticked/disabled.
+
+### My streams stop on ad breaks, why?
+
+This is a technology called SCTE-35 (aka. SSAI or DAI) which is injects ads/commercial breaks into streams based on parameters such as geolocation and demographics etc.
+
+FFmpeg and pretty much all players balk at it, because instead of a continuous stream like players/ffmpeg expects, it's more like a playlist.
+
+When the TV channel gets to an ad break, the ads are inserted into the dash or hls manifest. In some cases, it switches from separate audio and video streams, to a single stream with an already muxed mp4 file containing audio and video.
+
+This makes it extremely difficult to work around. At this stage, it is not anticipated the Dispatchwrapparr will support SCTE-35, however it won't be ruled out in a future release.
 
 ---
 
