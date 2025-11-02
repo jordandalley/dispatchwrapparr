@@ -41,7 +41,7 @@ from streamlink.session import Streamlink
 from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 def parse_args():
     # Initial wrapper arguments
@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument("-cookies", help="Optional: Supply a cookie jar txt file in Mozilla/Netscape format (e.g. 'cookies.txt')")
     parser.add_argument("-stream", help="Optional: Supply streamlink stream selection argument (eg. best, worst, 1080p, 1080p_alt, etc)")
     parser.add_argument("-ffmpeg", help="Optional: Specify a custom ffmpeg binary path")
+    parser.add_argument("-ff_start_at_zero", action="store_true", help="Optional: Enable the FFmpeg option to shift timestamps to zero")
     parser.add_argument("-subtitles", action="store_true", help="Optional: Enable support for subtitles (if available)")
     parser.add_argument("-novariantcheck", action="store_true", help="Optional: Do not autodetect if stream is audio-only or video-only")
     parser.add_argument("-novideo", action="store_true", help="Optional: Forces muxing of a blank video track into a stream that contains no audio")
@@ -140,7 +141,6 @@ class FFMPEGDRMMuxer(FFMPEGMuxer):
                 self._cmd.extend(["-re"])
                 self._cmd.extend(["-readrate_initial_burst", str(readrate_initial_burst)])
                 self._cmd.extend(["-copyts"])
-                self._cmd.extend(["-start_at_zero"])
                 self._cmd.extend(["-thread_queue_size", "512"])
                 key += 1
                 # If we had more streams than keys, start with the first
@@ -157,7 +157,9 @@ class FFMPEGDRMMuxer(FFMPEGMuxer):
         if self._cmd and (self._cmd[-1].startswith("pipe:") or not self._cmd[-1].startswith("-")):
             final_output = self._cmd.pop()
             # Output arguments
+
             self._cmd.extend(["-mpegts_copyts", "1"])
+            self._cmd.extend(["-thread_queue_size", "1024"])
             self._cmd.append(final_output)
         log.debug("Updated ffmpeg command %s", self._cmd)
 
@@ -415,8 +417,8 @@ class PlayRadio:
         cmd.extend([
             "-thread_queue_size", "512",
             "-i", self.url,
-            "-f", "lavfi",
             "-thread_queue_size", "512",
+            "-f", "lavfi",
             "-i", f"color=size={self.resolution}:rate={self.fps}:color=black"
         ])
 
@@ -431,6 +433,7 @@ class PlayRadio:
             "-c:v", self.vcodec,
             "-c:a", self.acodec,
             "-f", "mpegts",
+            "-thread_queue_size", "1024",
             "pipe:1",
         ])
 
@@ -961,13 +964,13 @@ def main():
     # Check for -ffmpeg cli option
     if dw_opts.ffmpeg:
         session.set_option("ffmpeg-ffmpeg", dw_opts.ffmpeg)
-        log.info(f"FFmpeg Location: '{dw_opts.ffmpeg}'")
+        log.info(f"FFmpeg: Location '{dw_opts.ffmpeg}'")
     else:
         # Check if an ffmpeg binary exists in the script path and use that if it's there
         ffmpeg_check = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg")
         if os.path.isfile(ffmpeg_check):
             dw_opts.ffmpeg = ffmpeg_check
-            log.info(f"FFmpeg Found: '{dw_opts.ffmpeg}'")
+            log.info(f"FFmpeg: Found at '{dw_opts.ffmpeg}'")
             session.set_option("ffmpeg-ffmpeg", dw_opts.ffmpeg)
 
     # Convert current python loglevel in an equivalent ffmpeg loglevel
@@ -975,6 +978,9 @@ def main():
     session.set_option("ffmpeg-loglevel", dw_opts.ffmpeg_loglevel) # Set ffmpeg loglevel
     session.set_option("ffmpeg-verbose", True) # Pass ffmpeg stderr through to streamlink
     session.set_option("ffmpeg-fout", "mpegts") # Encode as mpegts when ffmpeg muxing (not matroska like default)
+    if dw_opts.ff_start_at_zero:
+        session.set_option("ffmpeg-start-at-zero", True)
+        log.info(f"FFmpeg: -start_at_zero muxing option specified")
 
     """
     Stream detection and plugin loading
