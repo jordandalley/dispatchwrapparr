@@ -41,7 +41,7 @@ from streamlink.session import Streamlink
 from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 
-__version__ = "1.5.1"
+__version__ = "1.5.2"
 
 def parse_args():
     # Initial wrapper arguments
@@ -214,15 +214,26 @@ class DASHDRMStream(DASHStream):
         available_periods = [f"{idx}{f' (id={p.id!r})' if p.id is not None else ''}" for idx, p in enumerate(mpd.periods)]
         log.debug(f"Available DASH periods: {', '.join(available_periods)}")
 
+        if period == 0 and len(mpd.periods) > 1:
+            period = next(
+                (idx for idx, p in enumerate(mpd.periods) if getattr(p, 'duration', None) in (None, 0)),
+                len(mpd.periods) - 1  # fallback: last period
+            )
+
         try:
             if isinstance(period, int):
+                # selects period by index
                 period_selection = mpd.periods[period]
             else:
+                # selects period by ID
                 period_selection = mpd.periods_map[period]
+
         except LookupError:
             raise PluginError(
                 f"DASH period {period!r} not found. Select a valid period by index or by id attribute value.",
             ) from None
+
+        log.debug(f"Selected Period: {period}")
 
         # Search for suitable video and audio representations
 
