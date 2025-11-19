@@ -6,7 +6,7 @@
 
 ## 🤝 What does Dispatchwrapparr do?
 
-✅ **Builtin MPEG-DASH Clearkey/DRM Support** — Either append a `#clearkey=<clearkey>` fragment to the end of the URL or include a clearkeys json file or URL for DRM decryption\
+✅ **Builtin DASH and HLS Clearkey/DRM Support** — Either append a `#clearkey=<clearkey>` fragment to the end of the URL or include a clearkeys json file or URL for DRM decryption\
 ✅ **High Performance** — Uses streamlink API's for segment dowloading which significantly improves channel start times\
 ✅ **Highly Flexible** — Can support standard HLS, Mpeg-DASH as well as DASH-DRM, Youtube, Twitch and other livestreaming services as channels\
 ✅ **Proxy and Proxy Bypass Support** — Full support for passing proxy servers to bypass geo restrictions. Also support for bypassing proxy for specific URL's used in initial redirections or supply of clearkeys\
@@ -163,7 +163,7 @@ Below is an example of what Dispatchwrapparr expects in the json API response or
 
 ### Garbled/Green Video for DRM streams Dispatcharr builds 0.9.0-??
 
-There is currently an issue with decrypting DASHDRM streams since the release of Dispatcharr 0.9.0.
+There is currently an issue with decrypting DRM streams since the release of Dispatcharr 0.9.0.
 
 Dispatcharr uses [docker-ffmpeg](https://github.com/linuxserver/docker-ffmpeg) as a build layer, which was recently updated to ffmpeg 8.0. The particular build of ffmpeg 8.0 used in docker-ffmpeg contains a bug which causes garbled/green video content.
 
