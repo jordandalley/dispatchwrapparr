@@ -116,23 +116,23 @@ For example, to select the '720p+a128k_48k' stream variant, then it would look l
 
 ## ⚙️ CLI Arguments
 
-| Argument          | Type     | Example Values                                            | Description                                                                                                                                                                                  |
-| :---              | :---     | :---                                                      | :---                                                                                                                                                                                         | 
-| -i                | Required | `{streamUrl}`                                             | Input stream URL from Dispatcharr.                                                                                                                                                           |
-| -ua               | Required | `{userAgent}`                                             | Input user-agent header from Dispatcharr.                                                                                                                                                    |
-| -clearkeys        | Optional | `/path/to/clearkeys.json` or `https://url.to/clearkeys`   | Supply a json file or URL containing URL -> Clearkey pairs.                                                                                                                                  |
-| -proxy            | Optional | `http://proxy.server:8080`                                | Configure a proxy server. Supports HTTP and HTTPS proxies only.                                                                                                                              |
-| -proxybypass      | Optional | `.domain.com,192.168.0.100:80`                            | A comma delimited list of hostnames to bypass. Eg. '.local,192.168.0.44:90'. Do not use "*", this is unsupported. Whole domains match with '.'                                               |
-| -cookies          | Optional | `cookies.txt` or `/path/to/cookies.txt`                   | Supply a cookies txt file in Mozilla/Netscape format for use with streams                                                                                                                    |
-| -stream           | Optional | `1080p_alt` or `worst`                                    | Override Dispatchwrapparr automatic stream selection with a manual selection for the stream URL                                                                                              |
-| -ffmpeg           | Optional | `/path/to/ffmpeg`                                         | Specify the location of an ffmpeg binary for use in stream muxing instead of auto detecting ffmpeg binaries in PATH or in the same directory as dispatchwrapparr.py                          |
-| -ffmpeg_transcode_audio | Optional | `copy`, `eac3`, `aac`, `ac3`                        | Enables the ffmpeg option to transcode audio. By default, dispatchwrapparr just copies the audio.                                                                        |
-| -novariantcheck   | Optional |                                                           | Do not automatically detect audio-only or video-only streams and mux in blank video or silent audio for compatibility purposes. Just pass through the stream as-is (without video or audio). |
-| -noaudio          | Optional |                                                           | Disables variant checking (-novariantcheck) and manually specifies that the stream contains no audio. This instructs Dispatchwrapparr to mux in silent audio.                                |
-| -novideo          | Optional |                                                           | Disables variant checking (-novariantcheck) and manually specifies that the stream contains no video. This instructs Dispatchwrapparr to mux in blank video.                                 |
-| -nosonginfo       | Optional |                                                           | Disables the display of song information for radio streams. Only a blank video will be muxed                                                                                                 |
-| -loglevel         | Optional | `CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`, `NOTSET` | Sets the python and ffmpeg log levels. By default, the loglevel is set to 'INFO'                                                                                                             |
-| -subtitles        | Optional |                                                           | Enable muxing of subtitles. Disabled by default. NOTE: Subtitle support in streamlink is limited at best - this may not work as intended                                                     |
+| Argument                | Type     | Example Values                                            | Description                                                                                                                                                                                  |
+| :---                    | :---     | :---                                                      | :---                                                                                                                                                                                         | 
+| -i                      | Required | `{streamUrl}`                                             | Input stream URL from Dispatcharr.                                                                                                                                                           |
+| -ua                     | Required | `{userAgent}`                                             | Input user-agent header from Dispatcharr.                                                                                                                                                    |
+| -clearkeys              | Optional | `/path/to/clearkeys.json` or `https://url.to/clearkeys`   | Supply a json file or URL containing URL -> Clearkey pairs.                                                                                                                                  |
+| -proxy                  | Optional | `http://proxy.server:8080`                                | Configure a proxy server. Supports HTTP and HTTPS proxies only.                                                                                                                              |
+| -proxybypass            | Optional | `.domain.com,192.168.0.100:80`                            | A comma delimited list of hostnames to bypass. Eg. '.local,192.168.0.44:90'. Do not use "*", this is unsupported. Whole domains match with '.'                                               |
+| -cookies                | Optional | `cookies.txt` or `/path/to/cookies.txt`                   | Supply a cookies txt file in Mozilla/Netscape format for use with streams                                                                                                                    |
+| -stream                 | Optional | `1080p_alt` or `worst`                                    | Override Dispatchwrapparr automatic stream selection with a manual selection for the stream URL                                                                                              |
+| -ffmpeg                 | Optional | `/path/to/ffmpeg`                                         | Specify the location of an ffmpeg binary for use in stream muxing instead of auto detecting ffmpeg binaries in PATH or in the same directory as dispatchwrapparr.py                          |
+| -ffmpeg_transcode_audio | Optional | `copy`, `eac3`, `aac`, `ac3`                              | Enables the ffmpeg option to transcode audio. By default, dispatchwrapparr just copies the audio.                                                                                            |
+| -novariantcheck         | Optional |                                                           | Do not automatically detect audio-only or video-only streams and mux in blank video or silent audio for compatibility purposes. Just pass through the stream as-is (without video or audio). |
+| -noaudio                | Optional |                                                           | Disables variant checking (-novariantcheck) and manually specifies that the stream contains no audio. This instructs Dispatchwrapparr to mux in silent audio.                                |
+| -novideo                | Optional |                                                           | Disables variant checking (-novariantcheck) and manually specifies that the stream contains no video. This instructs Dispatchwrapparr to mux in blank video.                                 |
+| -nosonginfo             | Optional |                                                           | Disables the display of song information for radio streams. Only a blank video will be muxed                                                                                                 |
+| -loglevel               | Optional | `CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`, `NOTSET` | Sets the python and ffmpeg log levels. By default, the loglevel is set to 'INFO'                                                                                                             |
+| -subtitles              | Optional |                                                           | Enable muxing of subtitles. Disabled by default. NOTE: Subtitle support in streamlink is limited at best - this may not work as intended                                                     |
 
 Example: `dispatchwrapparr.py -i {streamUrl} -ua {userAgent} -proxy http://your.proxy.server:3128 -proxybypass 192.168.0.55,.somesite.com -clearkeys clearkeys.json -loglevel INFO`
 
@@ -161,20 +161,11 @@ Below is an example of what Dispatchwrapparr expects in the json API response or
 
 ## ‼️ Troubleshooting
 
-### Garbled/Green Video for DRM streams Dispatcharr builds 0.9.0-??
+### Garbled/Green Video for DRM streams with Dispatcharr builds 0.9.0-0.11.2
 
-There is currently an issue with decrypting DRM streams since the release of Dispatcharr 0.9.0.
+This issue is resolved with the release of Dispatcharr 0.12.0.
 
-Dispatcharr uses [docker-ffmpeg](https://github.com/linuxserver/docker-ffmpeg) as a build layer, which was recently updated to ffmpeg 8.0. The particular build of ffmpeg 8.0 used in docker-ffmpeg contains a bug which causes garbled/green video content.
-
-This bug has been fixed in subsequent builds of ffmpeg 8.0 but is not yet part of the main release.
-
-The solution at this stage is to download either an older or newer 'portable' ffmpeg binary and place it into the same directory as dispatchwrapparr.py. This is usually in `/data/dispatchwrapparr`.
-
-Some options are:
-
-- Jellyfin FFmpeg 7.0 Releases: Download the latest [jellyfin-ffmpeg_7.x_portable_linux64-gpl.tar.xz](https://github.com/jellyfin/jellyfin-ffmpeg/releases) release binaries
-- BtbN FFmpeg 8.0 Auto Builds: Download the latest [ffmpeg-master-latest-linux64-gpl.tar.xz](https://github.com/BtbN/FFmpeg-Builds/releases) auto-build binaries with bugfix applied
+Please ensure that you upgrade to the latest version.
 
 ### Out of Sync Audio or Streams stopping prematurely
 
@@ -196,7 +187,7 @@ This is a technology called SCTE-35 (aka. SSAI or DAI) which is injects ads/comm
 
 FFmpeg and pretty much all players balk at it, because instead of a continuous stream like players/ffmpeg expects, it's more like a playlist.
 
-When the TV channel gets to an ad break, the ads are inserted into the dash or hls manifest. In some cases, it switches from separate audio and video streams, to a single stream with an already muxed mp4 file containing audio and video.
+When the TV channel gets to an ad break, the ads are inserted into the dash or hls manifest. In some cases, it switches from separate audio and video streams, to a single stream with an already muxed mp4 file containing audio and video. There are also instances where the stream content is DRM encrypted, but the ads are not.
 
 This makes it extremely difficult to work around. At this stage, it is not anticipated the Dispatchwrapparr will support SCTE-35, however it won't be ruled out in a future release.
 
