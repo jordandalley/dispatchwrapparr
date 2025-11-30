@@ -47,7 +47,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 from streamlink.plugins.http import HTTPStreamPlugin
 
-__version__ = "1.5.3"
+__version__ = "1.5.4"
 
 def parse_args():
     # Initial wrapper arguments
@@ -142,14 +142,11 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
             cmd = old_cmd.pop(0)
             if keys and cmd == "-i":
                 _ = old_cmd.pop(0)
-                self._cmd.extend(["-thread_queue_size", "1024"])
                 self._cmd.extend(["-decryption_key", keys[key]])
-                self._cmd.extend(["-fflags", "+genpts+discardcorrupt"])
+                self._cmd.extend(["-fflags", "+genpts"])
                 self._cmd.extend(["-re"])
                 self._cmd.extend(["-copyts"])
                 self._cmd.extend(["-start_at_zero"])
-                self._cmd.extend(["-copy_unknown"])
-                self._cmd.extend(["-err_detect", "buffer+ignore_err"])
                 key += 1
                 # If we had more streams than keys, start with the first
                 # audio key again
@@ -167,7 +164,6 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
             self._cmd.extend(["-async", "1"])
             self._cmd.extend(["-fps_mode", "passthrough"])
             self._cmd.extend(["-mpegts_copyts", "1"])
-            self._cmd.extend(["-thread_queue_size", "2048"])
             self._cmd.append(final_output)
         log.debug("Updated ffmpeg command %s", self._cmd)
 
@@ -514,6 +510,14 @@ class HLSStreamDRMWriter(HLSStreamWriter):
     Writer that bypasses Streamlink's internal AES-128/SAMPLE-AES handling.
     Raw encrypted segments are passed through unchanged.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ignore_names: re.Pattern | None = None
+        ignore_names = set(self.session.options.get("hls-segment-ignore-names") or [])
+        if ignore_names:
+            segments = "|".join(map(re.escape, ignore_names))
+            self.ignore_names = re.compile(rf"(?:{segments})", re.IGNORECASE)
 
     def create_decryptor(self, key, sequence):
         log.debug(
@@ -1174,7 +1178,7 @@ def main():
 
     # Set generic session options for Streamlink
     session.set_option("stream-segment-threads", 2)
-
+    session.set_option("hls-segment-ignore-names", [".cmfv", ".cmfa"])
     # If cli -proxy argument supplied
     if dw_opts.proxy:
         # Set proxies as env vars for streamlink/requests/ffmpeg et al
