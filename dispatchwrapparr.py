@@ -47,7 +47,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 from streamlink.plugins.http import HTTPStreamPlugin
 
-__version__ = "1.5.4"
+__version__ = "1.5.5"
 
 def parse_args():
     # Initial wrapper arguments
@@ -164,6 +164,7 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
             self._cmd.extend(["-async", "1"])
             self._cmd.extend(["-fps_mode", "passthrough"])
             self._cmd.extend(["-mpegts_copyts", "1"])
+            self._cmd.extend(["-mpegts_flags", "+pat_pmt_at_frames+resend_headers+initial_discontinuity"])
             self._cmd.append(final_output)
         log.debug("Updated ffmpeg command %s", self._cmd)
 
@@ -297,7 +298,7 @@ class DASHStreamWorkerDRM(DASHStreamWorker):
         current_period_index = next(
             (idx for idx, p in enumerate(self.mpd.periods) if p.id == current_period),
             -1  # fallback: last period
-        )       
+        )
         log.debug(f"Current DASH DRM period index for REP {self.reader.ident[2]}: {current_period_index}")
 
 class DASHStreamReaderDRM(DASHStreamReader):
@@ -321,8 +322,8 @@ class DASHStreamDRM(DASHStream):
     def parse_mpd(manifest: str, mpd_params: Mapping[str, Any]) -> MPD:
         node = parse_xml(manifest, ignore_ns=True)
 
-        return MPD(node, **mpd_params)    
-    
+        return MPD(node, **mpd_params)
+
     @classmethod
     def parse_manifest(
         cls,
@@ -350,7 +351,7 @@ class DASHStreamDRM(DASHStream):
             mpd = cls.parse_mpd(manifest, mpd_params)
         except Exception as err:
             raise PluginError(f"Failed to parse MPD manifest: {err}") from err
-        
+
         # Increase the suggestedPresentationDelay to avoid stuttering playback
         mpd.suggestedPresentationDelay += timedelta(seconds=cls.__dashdrm_live_edge__)
         log.debug(f"MPEG-DASH Adjusted Presentation Delay: {mpd.suggestedPresentationDelay}")
@@ -648,9 +649,7 @@ class PlayRadio:
             cmd.extend(["-cookies", cookie_str])
 
         cmd.extend([
-            "-thread_queue_size", "512",
             "-i", self.url,
-            "-thread_queue_size", "512",
             "-f", "lavfi",
             "-i", f"color=size={self.resolution}:rate={self.fps}:color=black"
         ])
@@ -665,8 +664,8 @@ class PlayRadio:
         cmd.extend([
             "-c:v", self.vcodec,
             "-c:a", self.acodec,
+            "-af", "loudnorm=I=-18:LRA=11:TP=-2:linear=true",
             "-f", "mpegts",
-            "-thread_queue_size", "1024",
             "pipe:1",
         ])
 
@@ -990,7 +989,7 @@ def detect_streams(session, url, clearkey, subtitles):
             plugin = HTTPStreamPluginForced(session, url)
         else:
             raise PluginError("Could not detect stream type or no suitable plugin found.")
-        
+
     return plugin.streams()
 
 def check_stream_variant(stream, session=None):
