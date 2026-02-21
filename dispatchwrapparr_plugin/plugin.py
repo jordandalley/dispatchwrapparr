@@ -25,15 +25,6 @@ class Plugin:
     plugin_key = base_dir.name.replace(" ", "_").lower()
 
     def __init__(self):
-        try:
-            self.context = PluginConfig.objects.get(key=self.plugin_key)
-            self.settings = self.context.settings
-        except PluginConfig.DoesNotExist:
-            self.context = None
-            if os.path.isfile(self.dw_path):
-                self.settings = {"local_version": self.check_local_version()}
-            else:
-                self.settings = {}
         self.actions = []
         if os.path.isfile(self.dw_path) is False:
             self.actions.append(
@@ -137,7 +128,7 @@ class Plugin:
             )
             profile.save()
         
-        return {"status": "ok", "message": f"Installed Dispatchwrapparr v{self.settings.get('local_version')} to {self.dw_path}"}
+        return {"status": "ok", "message": f"Installed Dispatchwrapparr to {self.dw_path}"}
 
     def update_dw(self):
         resp = requests.get(self.dw_url)
@@ -159,7 +150,6 @@ class Plugin:
 
     # Main run function
     def run(self, action: str, params: dict, context: dict):
-        self.settings = context.get("settings", {})
         if action == "install":
             return self.install()
 
