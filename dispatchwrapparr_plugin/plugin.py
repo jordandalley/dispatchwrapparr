@@ -77,7 +77,7 @@ class Plugin:
                     "label": "Uninstall Dispatchwrapparr",
                     "button_label": "Uninstall",
                     "button_color": "red",
-                    "description": "Uninstall Dispatchwrapparr and reset plugin to defaults",
+                    "description": "Uninstall Dispatchwrapparr",
                     "confirm": confirm_uninstall
                 }
             )
