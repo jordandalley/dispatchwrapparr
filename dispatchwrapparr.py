@@ -47,7 +47,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 from streamlink.plugins.http import HTTPStreamPlugin
 
-__version__ = "1.5.6"
+__version__ = "1.5.7"
 
 def parse_args():
     # Initial wrapper arguments
@@ -917,6 +917,43 @@ def split_fragments(raw_url: str):
     else:
         return base_url, None
 
+def parse_fragment_headers(raw_header_values: str | list[str] | None) -> dict[str, str]:
+    """
+    Parse one or more `header=<name>:<value>` URL fragment entries into a header dict.
+
+    Args:
+        raw_header_values: A single header string or list of header strings.
+
+    Returns:
+        dict[str, str]: Parsed headers in insertion order.
+    """
+    if not raw_header_values:
+        return {}
+
+    values = raw_header_values if isinstance(raw_header_values, list) else [raw_header_values]
+    parsed_headers = {}
+
+    for value in values:
+        if not isinstance(value, str):
+            log.warning(f"Skipping malformed header fragment value: {value!r}")
+            continue
+
+        if ":" not in value:
+            log.warning(f"Skipping malformed header fragment '{value}': expected format '<Header-Name>:<Header-Value>'")
+            continue
+
+        name, header_value = value.split(":", 1)
+        name = name.strip()
+        header_value = header_value.strip()
+
+        if not name:
+            log.warning(f"Skipping malformed header fragment '{value}': header name cannot be empty")
+            continue
+
+        parsed_headers[name] = header_value
+
+    return parsed_headers
+
 def detect_streams(session, url, clearkey, subtitles):
     """
     Performs extended plugin matching for Streamlink
@@ -926,11 +963,13 @@ def detect_streams(session, url, clearkey, subtitles):
     def find_by_mime_type(session, url):
         try:
             # Use streamlink's existing requests session. I used a GET here because some servers don't allow HEAD.
+            session_headers = session.get_option("http-headers") or {}
+            probe_headers = {**session_headers, "Range": "bytes=0-1023"}
             with session.http.get(
                 url,
                 timeout=5,
                 stream=True,
-                headers={"Range": "bytes=0-1023"}
+                headers=probe_headers
             ) as response:
                 content_type = response.headers.get("Content-Type", "").lower()
                 log.debug(f"Detected Content-Type: {content_type}")
@@ -1122,7 +1161,7 @@ def main():
     # Collect cli args from argparse and pass initialise dw_opts
     dw_opts = parse_args()
     # Initialise dw_opts attributes that don't have a cli argument
-    for attr in ("clearkey", "referer", "origin"):
+    for attr in ("clearkey", "referer", "origin", "fragment_headers"):
         setattr(dw_opts, attr, None)
     # Configure log level
     log = configure_logging(dw_opts.loglevel)
@@ -1138,6 +1177,7 @@ def main():
         dw_opts.stream = fragments.get("stream").lower() if fragments.get("stream") else None
         dw_opts.referer = fragments.get("referer") if fragments.get("referer") else None
         dw_opts.origin = fragments.get("origin") if fragments.get("origin") else None
+        dw_opts.fragment_headers = parse_fragment_headers(fragments.get("header"))
         dw_opts.novariantcheck = (fragments["novariantcheck"].lower() == "true") if "novariantcheck" in fragments else False
         dw_opts.noaudio = (fragments["noaudio"].lower() == "true") if "noaudio" in fragments else False
         dw_opts.novideo = (fragments["novideo"].lower() == "true") if "novideo" in fragments else False
@@ -1171,6 +1211,12 @@ def main():
                 log.error("Custom headers should be a JSON object/dictionary.")
         except json.JSONDecodeError as e:
             log.error(f"Failed to parse custom headers JSON: {e}")
+
+    # Append custom headers from repeated URL fragment entries:
+    # #header=Authorization:Bearer%20XYZ&header=Origin:https://example.com
+    if dw_opts.fragment_headers:
+        headers.update(dw_opts.fragment_headers)
+        log.info(f"Header Fragments: {dw_opts.fragment_headers}")
 
     # Append additional headers if set
     if dw_opts.referer:

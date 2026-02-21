@@ -58,6 +58,7 @@ Below is a list of fragment options and their specifc usage:
 | Fragment       | Type          | Example Usage                                | Description                                                                                                                                                                                  |
 | :---           | :---          | :---                                         | :---                                                                                                                                                                                         | 
 | clearkey       | String        | `#clearkey=7ff8541ab5771900c442f0ba5885745f` | Defines the DRM Clearkey for decryption of stream content                                                                                                                                    | 
+| header         | String        | `#header=Authorization:Bearer%20XYZ&header=Origin:https://example.com` | Adds one or more custom HTTP headers using repeated `header=<Header-Name>:<Header-Value>` fragments                                                                                         |
 | referer        | String        | `#referer=https://somesite.com/`             | Defines the 'Referer' header to use for the stream URL                                                                                                                                       | 
 | origin         | String        | `#origin=https://somesite.com/`              | Defines the 'Origin' header to use for the stream URL                                                                                                                                        | 
 | stream         | String        | `#stream=1080p_alt`                          | Override Dispatchwrapparr automatic stream selection with a manual selection for the stream URL                                                                                              | 
@@ -70,6 +71,7 @@ Important notes about fragment options:
 - Fragments can be added to stream URL's inside m3u8 playlists, or added to stream URL's that are manually added as channels into Dispatcharr.
 - Fragments are never passed to the origin. They are stripped off the URL before the actual stream is requested.
 - Fragments will override any identical options specified by CLI arguments (Eg. `-clearkeys` / `#clearkey` or `-stream` / `#stream` ).
+- `header` fragments can be repeated. If the same header appears more than once, the last value wins.
 - Multiple fragments can be used, and can be separated by ampersand. (Eg. `https://stream.url/stream.manifest#clearkey=7ff8541ab5771900c442f0ba5885745f&referer=https://somesite.com/&stream=1080p_alt`).
 
 ### 🧑‍💻 Using the 'clearkey' URL fragment for DRM decryption
