@@ -47,7 +47,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 from streamlink.plugins.http import HTTPStreamPlugin
 
-__version__ = "1.5.5"
+__version__ = "1.5.6"
 
 def parse_args():
     # Initial wrapper arguments
@@ -58,6 +58,7 @@ def parse_args():
     parser.add_argument("-proxybypass", help="Optional: Comma-separated list of hostnames or IP patterns to bypass the proxy (e.g. '192.168.*.*,*.lan')")
     parser.add_argument("-clearkeys", help="Optional: Supply a json file or URL containing URL/Clearkey maps (e.g. 'clearkeys.json' or 'https://some.host/clearkeys.json')")
     parser.add_argument("-cookies", help="Optional: Supply a cookie jar txt file in Mozilla/Netscape format (e.g. 'cookies.txt')")
+    parser.add_argument("-customheaders", help="Optional: Supply custom headers as a JSON string (e.g. '{\"Authentication\": \"Bearer token\"}')")
     parser.add_argument("-stream", help="Optional: Supply streamlink stream selection argument (eg. best, worst, 1080p, 1080p_alt, etc)")
     parser.add_argument("-ffmpeg", help="Optional: Specify a custom ffmpeg binary path")
     parser.add_argument("-ffmpeg_transcode_audio", help="Optional: When muxing with ffmpeg, specify an output audio format (eg. aac, eac3, ac3, copy)")
@@ -1155,6 +1156,21 @@ def main():
         "User-Agent": dw_opts.ua
     }
     log.info(f"User Agent: '{dw_opts.ua}'")
+
+    # Search for plugins in the script path
+    session.plugins.load_path(os.path.dirname(os.path.abspath(__file__)))
+
+    # If -customheaders argument is supplied, parse and add to headers
+    if dw_opts.customheaders:
+        try:
+            custom_headers = json.loads(dw_opts.customheaders)
+            if isinstance(custom_headers, dict):
+                headers.update(custom_headers)
+                log.info(f"Custom Headers: {custom_headers}")
+            else:
+                log.error("Custom headers should be a JSON object/dictionary.")
+        except json.JSONDecodeError as e:
+            log.error(f"Failed to parse custom headers JSON: {e}")
 
     # Append additional headers if set
     if dw_opts.referer:

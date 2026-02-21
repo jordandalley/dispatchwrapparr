@@ -15,6 +15,7 @@
 ✅ **Extended Stream Type Detection** — Fallback option that checks MIME type of stream URL for streamlink plugin selection\
 ✅ **Streaming Radio Support with Song Information** — Play streaming radio to your TV with song information displayed on your screen for ICY and HLS stream types\
 ✅ **Automated Stream Variant Detection** — Detects streams with no video or no audio and muxes in the missing components for compatibility with most players
+✅ **Support for SSAI/DAI** — Supports streams using SCTE-35 type discontinuities for Server-Side or Dynamic Ad Injection
 
 ---
 
@@ -124,6 +125,7 @@ For example, to select the '720p+a128k_48k' stream variant, then it would look l
 | -proxy                  | Optional | `http://proxy.server:8080`                                | Configure a proxy server. Supports HTTP and HTTPS proxies only.                                                                                                                              |
 | -proxybypass            | Optional | `.domain.com,192.168.0.100:80`                            | A comma delimited list of hostnames to bypass. Eg. '.local,192.168.0.44:90'. Do not use "*", this is unsupported. Whole domains match with '.'                                               |
 | -cookies                | Optional | `cookies.txt` or `/path/to/cookies.txt`                   | Supply a cookies txt file in Mozilla/Netscape format for use with streams                                                                                                                    |
+| -customheaders          | Optional | `{"Authentication": "Bearer abc123", "Header": "Value"}`  | Supply a JSON string containing custom header values                                                                                                                                  |
 | -stream                 | Optional | `1080p_alt` or `worst`                                    | Override Dispatchwrapparr automatic stream selection with a manual selection for the stream URL                                                                                              |
 | -ffmpeg                 | Optional | `/path/to/ffmpeg`                                         | Specify the location of an ffmpeg binary for use in stream muxing instead of auto detecting ffmpeg binaries in PATH or in the same directory as dispatchwrapparr.py                          |
 | -ffmpeg_transcode_audio | Optional | `copy`, `eac3`, `aac`, `ac3`                              | Enables the ffmpeg option to transcode audio. By default, dispatchwrapparr just copies the audio.                                                                                            |
@@ -161,20 +163,6 @@ Below is an example of what Dispatchwrapparr expects in the json API response or
 
 ## ‼️ Troubleshooting
 
-### Garbled/Green Video for DRM streams with Dispatcharr builds 0.9.0-0.11.2
-
-This issue is resolved with the release of Dispatcharr 0.12.0.
-
-Please ensure that you upgrade to the latest version.
-
-### Out of Sync Audio or Streams stopping prematurely
-
-Different broadcasters use an array of different settings to deliver streaming content.
-
-If audio is out of sync, or streams are stopping prematurely (freezing), try the cli option `-ff_start_at_zero`.
-
-You may need to split this option off into its own Dispatcharr profile as it may affect other channels.
-
 ### Jellyfin IPTV streaming issues
 
 In Jellyfin there are a number of settings related to m3u8 manifests.
@@ -183,13 +171,13 @@ Make sure that all options ("Allow fMP4 transcoding container", "Allow stream sh
 
 ### My streams stop on ad breaks, why?
 
-This is a technology called SCTE-35 (aka. SSAI or DAI) which is injects ads/commercial breaks into streams based on parameters such as geolocation and demographics etc.
+This is a technology called SCTE-35 (aka. SSAI or DAI) which injects ads/commercial breaks into streams based on parameters such as geolocation and demographics etc.
 
-FFmpeg and pretty much all players balk at it, because instead of a continuous stream like players/ffmpeg expects, it's more like a playlist.
+While dispatchwrapparr has had some success in dealing with these types of streams, due to the way that some broadcasters implement SCTE-35 it may not always be stable.
 
-When the TV channel gets to an ad break, the ads are inserted into the dash or hls manifest. In some cases, it switches from separate audio and video streams, to a single stream with an already muxed mp4 file containing audio and video. There are also instances where the stream content is DRM encrypted, but the ads are not.
+### Can I use a custom Streamlink plugin?
 
-This makes it extremely difficult to work around. At this stage, it is not anticipated the Dispatchwrapparr will support SCTE-35, however it won't be ruled out in a future release.
+Yes, maybe. Dispatchwrapparr will look for plugins that are placed into the same directory as itself and load them. However, some plugins require Chromium based browsers for session tokens, and/or require additional arguments which Dispatchwrapparr will not pass through.
 
 ---
 

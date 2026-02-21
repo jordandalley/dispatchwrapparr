@@ -1,0 +1,7 @@
+{
+  "name": "Dispatchwrapparr Plugin",
+  "version": "1.0.1",
+  "description": "An installer/updater and stream profile generator for Dispatchwrapparr",
+  "author": "jordandalley",
+  "help_url": "https://github.com/jordandalley/dispatchwrapparr"
+}
