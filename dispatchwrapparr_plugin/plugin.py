@@ -77,7 +77,7 @@ class Plugin:
                     "label": "Uninstall Dispatchwrapparr",
                     "button_label": "Uninstall",
                     "button_color": "red",
-                    "description": "Uninstall Dispatchwrapparr",
+                    "description": f"Uninstall Dispatchwrapparr v{self.local_version} from Dispatcharr.",
                     "confirm": confirm_uninstall
                 }
             )
