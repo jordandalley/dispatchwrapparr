@@ -27,24 +27,23 @@ For ease of installation, Dispatchwrapparr can be installed via the Dispatchwrap
 2. In Dispatcharr, navigate to 'Settings' > 'Plugins'
 3. Click the 'Import Plugin' button and select the Dispatchwrapparr Plugin zip file you just downloaded
 3. Select 'Enable Now', and then 'Enable'
-4. Once the plugin is loaded, click 'Run' inside the 'Install Dispatchwrapparr' section
-<img width="489" height="278" alt="image" src="https://github.com/user-attachments/assets/0b00bdd6-7ad9-428c-b2b0-66e62279e747" />
+4. Once the plugin is loaded, click 'Install' button to install Dispatchwrapparr
+<img width="1400" height="476" alt="image" src="https://github.com/user-attachments/assets/554f7311-a6d0-45ca-b96f-c523173e8bdf" />
+5. Click the 'Refresh' button. Once successfully installed
 
-5. An alert box should come up to confirm installation
-<img width="350" height="87" alt="image" src="https://github.com/user-attachments/assets/082e4a58-6d1e-4945-bcae-168692a667be" />
+## ⬆️ Update Dispatchwrapparr
 
-6. Click the refresh icon <img width="29" height="29" alt="image" src="https://github.com/user-attachments/assets/0945ad01-9af6-49bf-80e6-ff9607bdc501" /> to display all available settings
+If a new release of Dispatchwrapparr is available, the Dispatchwrapparr plugin should give you the option to upgrade.
 
-## ➡️ Create a Dispatchwrapparr stream profile
+<img width="1344" height="244" alt="image" src="https://github.com/user-attachments/assets/7c391af0-b21e-4ddb-938c-5141ff5d22a7" />
 
-Dispatchwrapparr profiles can either be created manually under 'Settings' > 'Stream Profiles', or through the plugin interface.
-To create profiles manually, Dispatchwrapparr is usually installed under `/data/dispatchwrapparr/dispatchwrapparr.py`.
+Simply click the 'Update' button and follow the prompts.
 
-1. Create a new profile using the Dispatchwrapparr Plugin by navigating to 'Settings' > 'Plugins'
-2. Enter a 'Profile Name' and fill in any other relevant details for the profile.
-3. Click 'Run' next to 'Create Stream Profile'
-4. Refresh your browser, then apply the profile to any particular streams that you want
-5. Now select 'dispatchwrapparr' as your preferred profile on any particular streams!
+## ➡️ Create a Custom Dispatchwrapparr stream profile
+
+When using the Dispatchwrapparr plugin, the installation process will automatically create a 'Dispatchwrapparr' profile.
+
+Custom Dispatchwrapparr profiles can be created under 'Settings' > 'Stream Profiles' and by using the various CLI Arguments defined below.
 
 ---
 
