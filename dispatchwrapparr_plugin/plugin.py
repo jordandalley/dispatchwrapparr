@@ -14,7 +14,7 @@ from typing import Dict, Any
 
 class Plugin:
     name = "Dispatchwrapparr Plugin"
-    version = "1.0.1"
+    version = "1.0.2"
     description = "An installer/updater for Dispatchwrapparr"
     dw_path = "/data/dispatchwrapparr/dispatchwrapparr.py"
     profile_name = "Dispatchwrapparr"
@@ -23,6 +23,16 @@ class Plugin:
     dw_url = "https://raw.githubusercontent.com/jordandalley/dispatchwrapparr/refs/heads/main/dispatchwrapparr.py"
     base_dir = Path(__file__).resolve().parent
     plugin_key = base_dir.name.replace(" ", "_").lower()
+
+    @staticmethod
+    def parse_version(version_str):
+        """Parse a version string into a comparable tuple of ints. Returns None if unparseable."""
+        if not version_str:
+            return None
+        try:
+            return tuple(int(x) for x in version_str.strip().split("."))
+        except (ValueError, AttributeError):
+            return None
 
     def __init__(self):
         self.actions = []
@@ -38,60 +48,109 @@ class Plugin:
             )
 
         else:
-            confirm_update = {
-                "required": True,
-                "title": "Update Dispatchwrapparr?",
-                "button_label": "Update",
-                "button_color": "blue",
-                "message": "This will update Dispatchwrapparr to the latest version. Are you sure you want to continue?",
-            }
             confirm_uninstall = {
                 "required": True,
                 "title": "Uninstall Dispatchwrapparr?",
                 "message": "After uninstallation of Dispatchwrapparr, you can then delete this plugin. You will need to manually remove any Dispatchwrapparr stream profiles from 'Settings' -> 'Stream Profiles'",
             }
-            self.local_version = self.check_local_version()
+            self.local_version, self.local_version_error = self.check_local_version()
             self.remote_version = self.check_remote_version()
-            if self.local_version != self.remote_version:
+
+            local_v = self.parse_version(self.local_version)
+            remote_v = self.parse_version(self.remote_version)
+
+            if self.local_version is None:
+                # Could not determine local version (e.g. script has import errors)
+                error_detail = self.local_version_error or "No further details available."
+                self.actions.append(
+                    {
+                        "id": "update_dw",
+                        "label": "Repair required — Dispatchwrapparr failed to run",
+                        "button_label": "Repair",
+                        "button_color": "orange",
+                        "description": (
+                            f"Dispatchwrapparr could not be run and its version cannot be determined. "
+                            f"Repairing will replace the installed file with the latest version (v{self.remote_version}) from GitHub. "
+                            f"Once complete, click the refresh button on the top right of the page.<br><br>"
+                            f"<strong>Developer info:</strong><br><pre>{error_detail}</pre>"
+                        ),
+                        "confirm": {
+                            "required": True,
+                            "title": "Repair Dispatchwrapparr?",
+                            "button_label": "Repair",
+                            "button_color": "orange",
+                            "message": f"The installed file failed to run. This will overwrite it with v{self.remote_version} from GitHub. Are you sure you want to continue?",
+                        }
+                    }
+                )
+            elif local_v is not None and remote_v is not None and remote_v > local_v:
                 self.actions.append(
                     {
                         "id": "update_dw",
                         "label": "A new update is available!",
                         "button_label": "Update",
+                        "button_color": "blue",
                         "description": f"This will update Dispatchwrapparr from v{self.local_version} to v{self.remote_version}. Once complete, click the refresh button on the top right of the page.",
-                        "confirm": confirm_update
+                        "confirm": {
+                            "required": True,
+                            "title": "Update Dispatchwrapparr?",
+                            "button_label": "Update",
+                            "button_color": "blue",
+                            "message": f"This will update Dispatchwrapparr from v{self.local_version} to v{self.remote_version}. Are you sure you want to continue?",
+                        }
+                    }
+                )
+            elif local_v is not None and remote_v is not None and remote_v < local_v:
+                self.actions.append(
+                    {
+                        "id": "update_dw",
+                        "label": "Installed version is ahead of the release branch",
+                        "button_label": "Downgrade",
+                        "button_color": "red",
+                        "description": f"The installed version (v{self.local_version}) is newer than the latest release (v{self.remote_version}). Downgrading will replace the current file. Once complete, click the refresh button on the top right of the page.",
+                        "confirm": {
+                            "required": True,
+                            "title": "Downgrade Dispatchwrapparr?",
+                            "button_label": "Downgrade",
+                            "button_color": "red",
+                            "message": f"This will downgrade Dispatchwrapparr from v{self.local_version} to v{self.remote_version}. Are you sure you want to continue?",
+                        }
                     }
                 )
             self.actions.append(
-                {   
+                {
                     "id": "uninstall",
                     "label": "Uninstall Dispatchwrapparr",
                     "button_label": "Uninstall",
                     "button_color": "red",
-                    "description": f"Uninstall Dispatchwrapparr v{self.local_version} from Dispatcharr.",
+                    "description": f"Uninstall Dispatchwrapparr v{self.local_version or 'unknown'} from Dispatcharr. This will remove the file at {self.dw_path}.",
                     "confirm": confirm_uninstall
                 }
             )
 
     # Versioning functions
     def check_local_version(self):
+        """Returns (version_string_or_None, error_string_or_None)"""
         if os.path.isfile(self.dw_path):
             try:
                 result = subprocess.run(
                     ["python3", self.dw_path, "-v"],
                     capture_output=True,
                     text=True,
-                    check=True
                 )
-                tokens = result.stdout.strip().split()
-                if len(tokens) >= 2:
-                    return tokens[1].strip()
+                if result.returncode == 0:
+                    tokens = result.stdout.strip().split()
+                    if len(tokens) >= 2:
+                        return tokens[1].strip(), None
+                    else:
+                        return None, "Version output was unexpected: " + result.stdout.strip()
                 else:
-                    return None
-            except subprocess.CalledProcessError:
-                return None
+                    error = (result.stderr.strip() or result.stdout.strip() or "Unknown error (no output)")
+                    return None, error
+            except Exception as e:
+                return None, str(e)
         else:
-            return None
+            return None, None
 
     def check_remote_version(self):
         resp = requests.get(self.dw_latest)
