@@ -31,7 +31,6 @@ from datetime import timedelta
 from urllib.parse import urlparse, parse_qs
 from collections import defaultdict
 from contextlib import suppress
-from streamlink import Streamlink
 from streamlink.utils.parse import parse_xml
 from streamlink.plugins.dash import MPEGDASH
 from streamlink.plugins.hls import HLSPlugin
@@ -39,15 +38,19 @@ from streamlink.exceptions import PluginError, FatalPluginError, NoPluginError, 
 from streamlink.stream.dash import DASHStream, DASHStreamReader, DASHStreamWorker, DASHStreamWriter
 from streamlink.stream.dash.manifest import Representation, MPD, freeze_timeline
 from streamlink.stream.ffmpegmux import FFMPEGMuxer
-from streamlink.stream import HTTPStream, HLSStream, DASHStream, MuxedStream, Stream
+from streamlink.stream.http import HTTPStream
+from streamlink.stream.hls import HLSStream
+from streamlink.stream.ffmpegmux import MuxedStream
+from streamlink.stream.stream import Stream
 from streamlink.session import Streamlink
-from streamlink.stream.hls.hls import HLSStreamWriter, HLSStreamReader, Response
+from streamlink.stream.hls.hls import HLSStreamWriter, HLSStreamReader
+from requests import Response
 from streamlink.stream.hls.segment import HLSSegment
 from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 from streamlink.plugins.http import HTTPStreamPlugin
 
-__version__ = "1.5.7"
+__version__ = "1.5.8"
 
 def parse_args():
     # Initial wrapper arguments
