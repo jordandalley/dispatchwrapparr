@@ -21,29 +21,15 @@
 
 ## 🚀 Installation
 
-For ease of installation, Dispatchwrapparr can be installed via the Dispatchwrapparr Plugin.
+For ease of installation, Dispatchwrapparr can be installed through the official Dispatcharr plugin repository. Alternatively, it can be downloaded here: [Dispatchwrapparr Releases](https://github.com/jordandalley/dispatchwrapparr/releases/latest)
 
-1. Download the latest [Dispatchwrapparr Plugin](https://github.com/jordandalley/dispatchwrapparr/releases/latest) zip file 
-2. In Dispatcharr, navigate to 'Settings' > 'Plugins'
-3. Click the 'Import Plugin' button and select the Dispatchwrapparr Plugin zip file you just downloaded
-3. Select 'Enable Now', and then 'Enable'
-4. Once the plugin is loaded, click 'Install' button to install Dispatchwrapparr
-<img width="1400" height="476" alt="image" src="https://github.com/user-attachments/assets/554f7311-a6d0-45ca-b96f-c523173e8bdf" />
-5. Click the 'Refresh' button. Once successfully installed
+Once the Dispatchwrapparr plugin is installed, configuring your first profile is easy!
 
-## ⬆️ Update Dispatchwrapparr
+Simply enter in a name for your stream profile, then click the 'Generate Stream Profile' button.
 
-If a new release of Dispatchwrapparr is available, the Dispatchwrapparr plugin should give you the option to upgrade.
+Note: For the new stream profile to appear, you will need to refresh Dispatcharr from your browser.
 
-<img width="1344" height="244" alt="image" src="https://github.com/user-attachments/assets/7c391af0-b21e-4ddb-938c-5141ff5d22a7" />
-
-Simply click the 'Update' button and follow the prompts.
-
-## ➡️ Create a Custom Dispatchwrapparr stream profile
-
-When using the Dispatchwrapparr plugin, the installation process will automatically create a 'Dispatchwrapparr' profile.
-
-Custom Dispatchwrapparr profiles can be created under 'Settings' > 'Stream Profiles' and by using the various CLI Arguments defined below.
+<img width="608" height="982" alt="image" src="https://github.com/user-attachments/assets/bcfe255f-6454-437f-8016-e8a52776f39b" />
 
 ---
 
