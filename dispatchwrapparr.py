@@ -50,7 +50,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 from streamlink.plugins.http import HTTPStreamPlugin
 
-__version__ = "1.5.9"
+__version__ = "1.6.0"
 
 def parse_args():
     # Initial wrapper arguments

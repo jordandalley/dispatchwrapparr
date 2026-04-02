@@ -1,0 +1,12 @@
+{
+  "name": "Dispatchwrapparr",
+  "version": "1.6.0",
+  "description": "An intelligent DRM/Clearkey capable stream profile for Dispatcharr",
+  "author": "jordandalley",
+  "maintainers": ["michaelmurfy"],
+  "min_dispatcharr_version": "v0.21.0",
+  "help_url": "https://github.com/jordandalley/dispatchwrapparr",
+  "license": "MIT",
+  "repo_url": "https://github.com/jordandalley/dispatchwrapparr",
+  "discord_thread": "https://discord.com/channels/1340492560220684331/1422776847703212132"
+}
