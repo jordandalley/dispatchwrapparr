@@ -14,7 +14,7 @@
 ✅ **Cookie Jar Support** — Supports loading of cookie jar txt files in Netscape/Mozilla format\
 ✅ **Extended Stream Type Detection** — Fallback option that checks MIME type of stream URL for streamlink plugin selection\
 ✅ **Streaming Radio Support with Song Information** — Play streaming radio to your TV with song information displayed on your screen for ICY and HLS stream types\
-✅ **Automated Stream Variant Detection** — Detects streams with no video or no audio and muxes in the missing components for compatibility with most players
+✅ **Automated Stream Variant Detection** — Detects streams with no video or no audio and muxes in the missing components for compatibility with most players\
 ✅ **Support for SSAI/DAI** — Supports streams using SCTE-35 type discontinuities for Server-Side or Dynamic Ad Injection
 
 ---
@@ -112,7 +112,8 @@ For example, to select the '720p+a128k_48k' stream variant, then it would look l
 | -proxy                  | Optional | `http://proxy.server:8080`                                | Configure a proxy server. Supports HTTP and HTTPS proxies only.                                                                                                                              |
 | -proxybypass            | Optional | `.domain.com,192.168.0.100:80`                            | A comma delimited list of hostnames to bypass. Eg. '.local,192.168.0.44:90'. Do not use "*", this is unsupported. Whole domains match with '.'                                               |
 | -cookies                | Optional | `cookies.txt` or `/path/to/cookies.txt`                   | Supply a cookies txt file in Mozilla/Netscape format for use with streams                                                                                                                    |
-| -customheaders          | Optional | `'{"Authentication": "Bearer abc123", "Header": "Value"}'`| Supply a JSON string containing custom header values                                                                                                                                  |
+| -customheaders          | Optional | `'{"Authentication": "Bearer abc123", "Header": "Value"}'`| Supply a JSON string containing custom header values                                                                                                                                         |
+| -streamlink_plugins     | Optional | `/path/to/streamlink/plugins`                             | Specify a custom path for any Streamlink plugins that you wish to load                                                                                                                       |
 | -stream                 | Optional | `1080p_alt` or `worst`                                    | Override Dispatchwrapparr automatic stream selection with a manual selection for the stream URL                                                                                              |
 | -ffmpeg                 | Optional | `/path/to/ffmpeg`                                         | Specify the location of an ffmpeg binary for use in stream muxing instead of auto detecting ffmpeg binaries in PATH or in the same directory as dispatchwrapparr.py                          |
 | -ffmpeg_transcode_audio | Optional | `copy`, `eac3`, `aac`, `ac3`                              | Enables the ffmpeg option to transcode audio. By default, dispatchwrapparr just copies the audio.                                                                                            |
@@ -136,7 +137,15 @@ Below is an example of what Dispatchwrapparr expects in the json API response or
   "https://olsp.live.dash.c4assets.com/dash_iso_sp_tl/live/channel(c4)/manifest.mpd": "5ce85f1aa5771900b952f0ba58857d7a",
   "https://some.other.stream.com/somechannel/*.mpd": "7ff8541ab5771900c442f0ba5885745f"
 }
+```
 
+For streams where the video and audio use different clearkeys, place them in a comma separated list. Eg:
+
+```clearkeys.json
+{
+  "https://olsp.live.dash.c4assets.com/dash_iso_sp_tl/live/channel(c4)/manifest.mpd": "5ce85f1aa5771900b952f0ba58857d7a,7ff8541ab5771900c442f0ba5885745f",
+  "https://some.other.stream.com/somechannel/*.mpd": "7ff8541ab5771900c442f0ba5885745f"
+}
 ```
 
 - A json file can be specified by just the filename (Eg. `-clearkeys clearkeys.json`) where it will use the file 'clearkeys.json' within the same directory as dispatchwrapparr.py (Usually /data/dispatchwrapparr), or an absolute path to a json file (Eg. `-clearkeys /path/to/clearkeys.json`)

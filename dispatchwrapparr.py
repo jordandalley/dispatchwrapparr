@@ -38,9 +38,9 @@ from streamlink.exceptions import PluginError, FatalPluginError, NoPluginError, 
 from streamlink.stream.dash import DASHStream, DASHStreamReader, DASHStreamWorker, DASHStreamWriter
 from streamlink.stream.dash.manifest import Representation, MPD, freeze_timeline
 from streamlink.stream.ffmpegmux import FFMPEGMuxer
+from streamlink.stream.ffmpegmux import MuxedStream
 from streamlink.stream.http import HTTPStream
 from streamlink.stream.hls import HLSStream
-from streamlink.stream.ffmpegmux import MuxedStream
 from streamlink.stream.stream import Stream
 from streamlink.session import Streamlink
 from streamlink.stream.hls.hls import HLSStreamWriter, HLSStreamReader
@@ -50,7 +50,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 from streamlink.plugins.http import HTTPStreamPlugin
 
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 
 def parse_args():
     # Initial wrapper arguments
@@ -62,6 +62,7 @@ def parse_args():
     parser.add_argument("-clearkeys", help="Optional: Supply a json file or URL containing URL/Clearkey maps (e.g. 'clearkeys.json' or 'https://some.host/clearkeys.json')")
     parser.add_argument("-cookies", help="Optional: Supply a cookie jar txt file in Mozilla/Netscape format (e.g. 'cookies.txt')")
     parser.add_argument("-customheaders", help="Optional: Supply custom headers as a JSON string (e.g. '{\"Authentication\": \"Bearer token\"}')")
+    parser.add_argument("-streamlink_plugins", help="Optional: Specify a custom path for Streamlink plugins")
     parser.add_argument("-stream", help="Optional: Supply streamlink stream selection argument (eg. best, worst, 1080p, 1080p_alt, etc)")
     parser.add_argument("-ffmpeg", help="Optional: Specify a custom ffmpeg binary path")
     parser.add_argument("-ffmpeg_transcode_audio", help="Optional: When muxing with ffmpeg, specify an output audio format (eg. aac, eac3, ac3, copy)")
@@ -82,6 +83,15 @@ def parse_args():
     flags = [args.novideo, args.noaudio, args.novariantcheck, args.clearkeys]
     if sum(bool(f) for f in flags) > 1:
         parser.error("Arguments -novariantcheck, -novideo, -noaudio and -clearkeys can only be used individually")
+
+    # Check if directories exist
+    if args.ffmpeg:
+        if not os.path.isdir(args.ffmpeg):
+            parser.error(f"Argument -ffmpeg: The path '{args.ffmpeg}' does not exist!")
+
+    if args.streamlink_plugins:
+        if not os.path.isdir(args.streamlink_plugins):
+            parser.error(f"Argument -streamlink_plugins: The path '{args.streamlink_plugins}' does not exist!")
 
     return args
 
@@ -119,43 +129,37 @@ def configure_logging(level="INFO") -> logging.Logger:
 
 class FFMPEGMuxerDRM(FFMPEGMuxer):
     """
-    Inherits and extends Streamlink's FFMPEGMuxer class to add
-    the additional -decryption_key arguments for DRM decryption
+    An FFmpeg muxer class that handles clearkeys for DRM decryption
     """
 
     @classmethod
     def _get_keys(cls, session):
-        keys=[]
-        if session.options.get("clearkeys"):
-            keys = session.options.get("clearkeys")
-            # If only 1 key, then we use that for all remaining streams
-            if len(keys) == 1:
-                keys.extend(keys)
-        return keys
+        return session.get_option("clearkeys") or []
 
     def __init__(self, session, *streams, **kwargs):
         super().__init__(session, *streams, **kwargs)
-
-        # initialise keys var by calling get_keys func with session
         keys = self._get_keys(session)
-        key = 0
-        subtitles = self.session.options.get("mux-subtitles")
+        input_index = 0
+        subtitles = self.session.get_option("mux-subtitles")
+
         old_cmd = self._cmd.copy()
-        self._cmd = []
+        self._cmd = [old_cmd.pop(0)] 
+
+        self._cmd.extend(["-copyts", "-fflags", "+genpts"])
+
         while len(old_cmd) > 0:
             cmd = old_cmd.pop(0)
-            if keys and cmd == "-i":
-                _ = old_cmd.pop(0)
-                self._cmd.extend(["-decryption_key", keys[key]])
-                self._cmd.extend(["-fflags", "+genpts"])
-                self._cmd.extend(["-re"])
-                self._cmd.extend(["-copyts"])
-                self._cmd.extend(["-start_at_zero"])
-                key += 1
-                # If we had more streams than keys, start with the first
-                # audio key again
-                if key == len(keys):
-                    key = 1
+            if cmd == "-i":
+                _ = old_cmd.pop(0) 
+                self._cmd.extend(["-thread_queue_size", "5120"])
+                
+                if keys:
+                    # safely pick the current key, or lock onto the last available key
+                    # (e.g. Video = keys[0], Audio = keys[1], Alt Audio = keys[1])
+                    current_key = keys[min(input_index, len(keys) - 1)]
+                    self._cmd.extend(["-decryption_key", current_key])
+                    input_index += 1
+                    
                 self._cmd.extend([cmd, _])
             elif subtitles and cmd == "-c:a":
                 _ = old_cmd.pop(0)
@@ -163,14 +167,14 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
                 self._cmd.extend(["-c:s", "copy"])
             else:
                 self._cmd.append(cmd)
+
         if self._cmd and (self._cmd[-1].startswith("pipe:") or not self._cmd[-1].startswith("-")):
             final_output = self._cmd.pop()
             self._cmd.extend(["-async", "1"])
             self._cmd.extend(["-fps_mode", "passthrough"])
-            self._cmd.extend(["-mpegts_copyts", "1"])
-            self._cmd.extend(["-mpegts_flags", "+pat_pmt_at_frames+resend_headers+initial_discontinuity"])
             self._cmd.append(final_output)
-        log.debug("Updated ffmpeg command %s", self._cmd)
+
+        log.debug("Unified FFmpeg Command: %s", self._cmd)
 
 class DASHStreamWriterDRM(DASHStreamWriter):
     reader: DASHStreamReaderDRM
@@ -516,22 +520,6 @@ class HLSStreamDRMWriter(HLSStreamWriter):
     Raw encrypted segments are passed through unchanged.
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.ignore_names: re.Pattern | None = None
-        ignore_names = set(self.session.options.get("hls-segment-ignore-names") or [])
-        if ignore_names:
-            segments = "|".join(map(re.escape, ignore_names))
-            self.ignore_names = re.compile(rf"(?:{segments})", re.IGNORECASE)
-
-    def create_decryptor(self, key, sequence):
-        log.debug(
-            "HLSStreamDRMWriter: skipping internal decryption for key method=%s uri=%s",
-            getattr(key, "method", None),
-            getattr(key, "uri", None),
-        )
-        return None  # sent to _write()
-
     def _write(self, segment: HLSSegment, result: Response, is_map: bool):
         """
         Writes raw segment bytes directly to buffer, skipping Streamlink decryptor logic.
@@ -540,13 +528,10 @@ class HLSStreamDRMWriter(HLSStreamWriter):
             for chunk in result.iter_content(self.WRITE_CHUNK_SIZE):
                 if not chunk:
                     continue
-                # IMPORTANT: write directly to buffer (same as normal writer's decrypted output)
                 self.reader.buffer.write(chunk)
         except Exception as err:
             log.error("Segment %s download failed: %s", segment.num, err)
             return
-
-        log.debug("HLS DRM segment %s complete (%s)", segment.num, "map" if is_map else "media")
 
 class HLSStreamDRMReader(HLSStreamReader):
     __writer__ = HLSStreamDRMWriter
@@ -560,23 +545,12 @@ class HLSStreamDRM(HLSStream):
     __reader__ = HLSStreamDRMReader
 
     def open(self):
-        """
-        Override Streamlink's open() so that ALL HLS DRM streams are handled
-        by FFMPEGMuxerDRM
-        """
-
-        reader = self.__reader__(self)   # same as HLSStreamReader
+        reader = self.__reader__(self)
         log.debug(f"HLSDRM: Opening HLS-DRM reader for {self.url}")
-
-        # Always open the reader before muxing
         reader.open()
-
-        # identical to your DASH logic
-        if FFMPEGMuxerDRM.is_usable(self.session):
-            log.debug("HLSDRM: Routing stream to FFMPEGMuxerDRM")
-            return FFMPEGMuxerDRM(self.session, reader).open()
-
-        # fallback (rare)
+        
+        # We no longer wrap the individual stream in FFmpeg!
+        # The new global FFMPEGMuxerDRM will handle both readers at the end.
         return reader
 
 class HLSPluginDRM(HLSPlugin):
@@ -698,6 +672,14 @@ class PlayRadio:
             self._stop_metadata_thread.set()
             self._metadata_thread.join()
             self._metadata_thread = None
+            
+        # Clean up the orphaned temp file
+        if hasattr(self, "metafile") and os.path.exists(self.metafile):
+            try:
+                os.remove(self.metafile)
+                log.debug(f"Cleaned up temporary metafile: {self.metafile}")
+            except OSError as e:
+                log.debug(f"Failed to remove temp metafile {self.metafile}: {e}")
 
     def __enter__(self):
         return self
@@ -780,10 +762,42 @@ class PlayRadio:
 
             # grab last segment
             extinf = playlist.segments[-1].title
+            if not extinf:
+                return result
+
+            # Extract key="value" pairs
             matches = re.findall(r'(\w+)="([^"]+)"', extinf)
-            seen = set()
-            unique_values = [v for _, v in matches if not (v in seen or seen.add(v))]
-            result = "\n".join(unique_values)
+            
+            if matches:
+                # Convert to lowercase dictionary for easy, case-insensitive lookup
+                tags = {k.lower(): v.strip() for k, v in matches}
+                artist = tags.get("artist", "")
+                title = tags.get("title", "")
+                
+                if artist and title:
+                    # 1. Prevent duplication if artist and title are exactly the same
+                    if artist.lower() == title.lower():
+                        result = title
+                    # 2. Prevent duplication if the artist is already baked into the title string
+                    elif artist.lower() in title.lower():
+                        result = title
+                    elif title.lower() in artist.lower():
+                        result = artist
+                    # 3. Format cleanly on a single line for FFmpeg
+                    else:
+                        result = f"{artist} - {title}"
+                elif title:
+                    result = title
+                elif artist:
+                    result = artist
+                else:
+                    # Fallback: if there are other random tags, join them on a single line
+                    seen = set()
+                    unique_values = [v for _, v in matches if not (v in seen or seen.add(v))]
+                    result = " - ".join(unique_values)
+            else:
+                # Fallback: if there are no key="value" pairs, just use the raw string
+                result = extinf.strip()
 
         # return any valid result
         return result
@@ -962,6 +976,10 @@ def detect_streams(session, url, clearkey, subtitles):
     Performs extended plugin matching for Streamlink
     Returns a dict of possible streams
     """
+    if clearkey:
+        # Monkey patch custom FFMPEG muxer if clearkey supplied
+        import streamlink.stream.ffmpegmux
+        streamlink.stream.ffmpegmux.FFMPEGMuxer = FFMPEGMuxerDRM
 
     def find_by_mime_type(session, url):
         try:
@@ -1125,18 +1143,16 @@ def process_keys(clearkeys):
     Process provided clearkeys to ensure they are in the correct format for ffmpeg
     Adapted from code by Titus-AU: https://github.com/titus-au/
     """
-    # Convert provided string into a tuple
-    keys = [clearkeys]
+    # Split the string by commas to support multiple keys (e.g., kid1:key1,kid2:key2)
+    keys = [k.strip() for k in clearkeys.split(",")]
     return_keys = []
+    
     for k in keys:
-        # if a colon separated key is given, assume its kid:key and take the
-        # last component after the colon
         key = k.split(':')
         key_len = len(key[-1])
         log.debug('Decryption Key %s has %s digits', key[-1], key_len)
+        
         if key_len in (21, 22, 23, 24):
-            # key len of 21-24 may mean a base64 key was provided, so we
-            # try and decode it
             log.debug("Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
             b64_string = key[-1]
             padding = (-len(b64_string)) % 4
@@ -1144,18 +1160,20 @@ def process_keys(clearkeys):
                 b64_string = b64_string + ("=" * padding)
             b64_key = base64.urlsafe_b64decode(b64_string).hex()
             if b64_key:
-                key = [b64_key]
+                key[-1] = b64_key
                 key_len = len(b64_key)
                 log.debug('Decryption Key (post base64 decode) is %s and has %s digits', key[-1], key_len)
+                
         if key_len == 32:
-            # sanity check that it's a valid hex string
             try:
                 int(key[-1], 16)
-            except ValueError as err:
-                raise FatalPluginError(f"Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
+            except ValueError:
+                raise FatalPluginError("Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
         elif key_len != 32:
-            raise FatalPluginError(f"Expecting 128bit key in 32 hex digits.")
+            raise FatalPluginError("Expecting 128bit key in 32 hex digits.")
+            
         return_keys.append(key[-1])
+        
     return return_keys
 
 def main():
@@ -1200,8 +1218,9 @@ def main():
     }
     log.info(f"User Agent: '{dw_opts.ua}'")
 
-    # Search for plugins in the script path
-    session.plugins.load_path(os.path.dirname(os.path.abspath(__file__)))
+    # Load streamlink plugins if -streamlink_plugins argument is supplied
+    if dw_opts.streamlink_plugins:
+        session.plugins.load_path(os.path.dirname(os.path.abspath(__file__)))
 
     # If -customheaders argument is supplied, parse and add to headers
     if dw_opts.customheaders:
@@ -1242,7 +1261,6 @@ def main():
 
     # Set generic session options for Streamlink
     session.set_option("stream-segment-threads", 2)
-    session.set_option("hls-segment-ignore-names", [".cmfv", ".cmfa"])
     # If cli -proxy argument supplied
     if dw_opts.proxy:
         # Set proxies as env vars for streamlink/requests/ffmpeg et al
