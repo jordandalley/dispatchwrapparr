@@ -188,6 +188,7 @@ This script was made possible thanks to many wonderful python libraries and open
 - [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) development community for making such an awesome stream manager!
 - [SergeantPanda](https://github.com/SergeantPanda) for support and guidance on the Dispatcharr discord
 - [OkinawaBoss](https://github.com/OkinawaBoss) for creating the Dispatcharr plugin system and providing example code
+- [sethwv](https://github.com/sethwv) for building such an awesome plugin system in Dispatcharr
 - [Streamlink](https://streamlink.github.io/) for their awesome API and stream handling capability
 - [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) who laid a lot of the groundwork for managing DASHDRM streams in streamlink!
 - [matthuisman](https://github.com/matthuisman) this guy is a local streaming legend in New Zealand. His code and work with streams has taught me heaps!
