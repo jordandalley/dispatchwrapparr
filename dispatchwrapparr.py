@@ -50,7 +50,7 @@ from streamlink.utils.l10n import Language
 from streamlink.utils.times import now
 from streamlink.plugins.http import HTTPStreamPlugin
 
-__version__ = "1.6.1"
+__version__ = "1.6.2"
 
 def parse_args():
     # Initial wrapper arguments
@@ -66,6 +66,7 @@ def parse_args():
     parser.add_argument("-stream", help="Optional: Supply streamlink stream selection argument (eg. best, worst, 1080p, 1080p_alt, etc)")
     parser.add_argument("-ffmpeg", help="Optional: Specify a custom ffmpeg binary path")
     parser.add_argument("-ffmpeg_transcode_audio", help="Optional: When muxing with ffmpeg, specify an output audio format (eg. aac, eac3, ac3, copy)")
+    parser.add_argument("-ffmpeg_nocopyts", action="store_true", help="Optional: Disable the copying of timestamps during muxing with ffmpeg")
     parser.add_argument("-subtitles", action="store_true", help="Optional: Enable support for subtitles (if available)")
     parser.add_argument("-novariantcheck", action="store_true", help="Optional: Do not autodetect if stream is audio-only or video-only")
     parser.add_argument("-novideo", action="store_true", help="Optional: Forces muxing of a blank video track into a stream that contains no audio")
@@ -145,21 +146,20 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
         old_cmd = self._cmd.copy()
         self._cmd = [old_cmd.pop(0)] 
 
-        self._cmd.extend(["-copyts", "-fflags", "+genpts"])
+        self._cmd.extend(["-fflags", "+genpts"])
 
         while len(old_cmd) > 0:
             cmd = old_cmd.pop(0)
             if cmd == "-i":
-                _ = old_cmd.pop(0) 
+                _ = old_cmd.pop(0)
                 self._cmd.extend(["-thread_queue_size", "5120"])
-                
                 if keys:
                     # safely pick the current key, or lock onto the last available key
                     # (e.g. Video = keys[0], Audio = keys[1], Alt Audio = keys[1])
                     current_key = keys[min(input_index, len(keys) - 1)]
                     self._cmd.extend(["-decryption_key", current_key])
                     input_index += 1
-                    
+
                 self._cmd.extend([cmd, _])
             elif subtitles and cmd == "-c:a":
                 _ = old_cmd.pop(0)
@@ -548,7 +548,7 @@ class HLSStreamDRM(HLSStream):
         reader = self.__reader__(self)
         log.debug(f"HLSDRM: Opening HLS-DRM reader for {self.url}")
         reader.open()
-        
+
         # We no longer wrap the individual stream in FFmpeg!
         # The new global FFMPEGMuxerDRM will handle both readers at the end.
         return reader
@@ -672,7 +672,7 @@ class PlayRadio:
             self._stop_metadata_thread.set()
             self._metadata_thread.join()
             self._metadata_thread = None
-            
+
         # Clean up the orphaned temp file
         if hasattr(self, "metafile") and os.path.exists(self.metafile):
             try:
@@ -767,13 +767,13 @@ class PlayRadio:
 
             # Extract key="value" pairs
             matches = re.findall(r'(\w+)="([^"]+)"', extinf)
-            
+
             if matches:
                 # Convert to lowercase dictionary for easy, case-insensitive lookup
                 tags = {k.lower(): v.strip() for k, v in matches}
                 artist = tags.get("artist", "")
                 title = tags.get("title", "")
-                
+
                 if artist and title:
                     # 1. Prevent duplication if artist and title are exactly the same
                     if artist.lower() == title.lower():
@@ -976,10 +976,6 @@ def detect_streams(session, url, clearkey, subtitles):
     Performs extended plugin matching for Streamlink
     Returns a dict of possible streams
     """
-    if clearkey:
-        # Monkey patch custom FFMPEG muxer if clearkey supplied
-        import streamlink.stream.ffmpegmux
-        streamlink.stream.ffmpegmux.FFMPEGMuxer = FFMPEGMuxerDRM
 
     def find_by_mime_type(session, url):
         try:
@@ -1001,7 +997,8 @@ def detect_streams(session, url, clearkey, subtitles):
         if "vnd.apple.mpegurl" in content_type or "x-mpegurl" in content_type:
             stream_type = "hls"
         # MPEG-DASH stream detected by content-type
-        elif "dash+xml" in content_type:
+        # Added text/xml for lazy CDN's that don't set mime type to dash+xml
+        elif "dash+xml" or "text/xml" in content_type:
             stream_type = "dash"
         # Standard HTTP Stream detected by content-type. Return with "live" as only one variant will exist.
         elif "application/octet-stream" in content_type or content_type.startswith("audio/") or content_type.startswith("video/") or content_type.endswith("/ogg"):
@@ -1120,6 +1117,7 @@ def create_silent_audio(session, ffmpeg_loglevel) -> Stream:
     ffmpeg_bin = session.get_option("ffmpeg-ffmpeg") or "ffmpeg"
     cmd = [
         ffmpeg_bin,
+        "-loglevel", ffmpeg_loglevel,
         "-f", "lavfi",
         "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
         "-c:a", "aac",
@@ -1146,12 +1144,12 @@ def process_keys(clearkeys):
     # Split the string by commas to support multiple keys (e.g., kid1:key1,kid2:key2)
     keys = [k.strip() for k in clearkeys.split(",")]
     return_keys = []
-    
+
     for k in keys:
         key = k.split(':')
         key_len = len(key[-1])
         log.debug('Decryption Key %s has %s digits', key[-1], key_len)
-        
+
         if key_len in (21, 22, 23, 24):
             log.debug("Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
             b64_string = key[-1]
@@ -1163,7 +1161,7 @@ def process_keys(clearkeys):
                 key[-1] = b64_key
                 key_len = len(b64_key)
                 log.debug('Decryption Key (post base64 decode) is %s and has %s digits', key[-1], key_len)
-                
+
         if key_len == 32:
             try:
                 int(key[-1], 16)
@@ -1171,14 +1169,17 @@ def process_keys(clearkeys):
                 raise FatalPluginError("Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
         elif key_len != 32:
             raise FatalPluginError("Expecting 128bit key in 32 hex digits.")
-            
+
         return_keys.append(key[-1])
-        
+
     return return_keys
 
 def main():
     # Set log as global var
     global log
+    # Monkey patch custom FFMPEG muxer
+    import streamlink.stream.ffmpegmux
+    streamlink.stream.ffmpegmux.FFMPEGMuxer = FFMPEGMuxerDRM
     # Collect cli args from argparse and pass initialise dw_opts
     dw_opts = parse_args()
     # Initialise dw_opts attributes that don't have a cli argument
@@ -1191,7 +1192,6 @@ def main():
     # Process the input url and split off any fragments. Returns nonetype if no fragments
     url, fragments = split_fragments(dw_opts.i)
     log.info(f"Stream URL: '{url}'")
-
     # Begin processing URL fragments into dw_opts
     if fragments:
         dw_opts.clearkey = fragments.get("clearkey") if fragments.get("clearkey") else None
@@ -1200,6 +1200,7 @@ def main():
         dw_opts.origin = fragments.get("origin") if fragments.get("origin") else None
         dw_opts.fragment_headers = parse_fragment_headers(fragments.get("header"))
         dw_opts.novariantcheck = (fragments["novariantcheck"].lower() == "true") if "novariantcheck" in fragments else False
+        dw_opts.ffmpeg_nocopyts = (fragments["ffmpeg_nocopyts"].lower() == "true") if "ffmpeg_nocopyts" in fragments else False
         dw_opts.noaudio = (fragments["noaudio"].lower() == "true") if "noaudio" in fragments else False
         dw_opts.novideo = (fragments["novideo"].lower() == "true") if "novideo" in fragments else False
 
@@ -1261,6 +1262,8 @@ def main():
 
     # Set generic session options for Streamlink
     session.set_option("stream-segment-threads", 2)
+    # Start HLS stream further in from the live edge
+    session.set_option("hls-live-edge", 6)
     # If cli -proxy argument supplied
     if dw_opts.proxy:
         # Set proxies as env vars for streamlink/requests/ffmpeg et al
@@ -1299,12 +1302,14 @@ def main():
     if dw_opts.ffmpeg_transcode_audio:
         session.set_option("ffmpeg-audio-transcode", dw_opts.ffmpeg_transcode_audio)
         log.info(f"FFmpeg: Transcode audio to '{dw_opts.ffmpeg_transcode_audio}'")
+    # Set copy timestamps for ffmpeg muxing based on user input
+    session.set_option("ffmpeg-copyts", not dw_opts.ffmpeg_nocopyts) 
+    log.info(f"FFmpeg: Set copy timestamps to '{not dw_opts.ffmpeg_nocopyts}'")
     # Convert current python loglevel in an equivalent ffmpeg loglevel
     dw_opts.ffmpeg_loglevel = get_ffmpeg_loglevel(dw_opts.loglevel)
     session.set_option("ffmpeg-loglevel", dw_opts.ffmpeg_loglevel) # Set ffmpeg loglevel
     session.set_option("ffmpeg-verbose", True) # Pass ffmpeg stderr through to streamlink
     session.set_option("ffmpeg-fout", "mpegts") # Encode as mpegts when ffmpeg muxing (not matroska like default)
-
     """
     Stream detection and plugin loading
     """
