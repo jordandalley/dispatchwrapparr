@@ -21,15 +21,19 @@
 
 ## 🚀 Installation
 
-For ease of installation, Dispatchwrapparr can be installed through the official Dispatcharr plugin repository. Alternatively, it can be downloaded here: [Dispatchwrapparr Releases](https://github.com/jordandalley/dispatchwrapparr/releases/latest)
+Dispatchwrapparr can be installed through the official Dispatcharr plugin repository.
+
+You can find this in Dispatcharr under 'Plugins' -> 'Find Plugins' and searching for 'Dispatchwrapparr'.
 
 Once the Dispatchwrapparr plugin is installed, configuring your first profile is easy!
 
-Simply enter in a name for your stream profile, then click the 'Generate Stream Profile' button.
+<img width="383" height="182" alt="image" src="https://github.com/user-attachments/assets/f67e12ea-e03d-4ca2-aed3-b4b6ffe28b3e" />
+
+Simply click 'Settings', complete the details in the form and then click 'Save'. When finished, click the 'Actions' tab and then click the 'Generate Stream Profile' button.
 
 Note: For the new stream profile to appear, you will need to refresh Dispatcharr from your browser.
 
-<img width="608" height="982" alt="image" src="https://github.com/user-attachments/assets/bcfe255f-6454-437f-8016-e8a52776f39b" />
+Dispatchwrapparr has many more features than those available in the form. The below documentation contains an exhaustive list of the capabilities of the plugin including how to achieve DRM decryption of HLS and DASH streams using clearkey(s).
 
 ---
 
@@ -192,6 +196,7 @@ This script was made possible thanks to many wonderful python libraries and open
 - [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) development community for making such an awesome stream manager!
 - [SergeantPanda](https://github.com/SergeantPanda) for support and guidance on the Dispatcharr discord
 - [OkinawaBoss](https://github.com/OkinawaBoss) for creating the Dispatcharr plugin system and providing example code
+- [sethwv](https://github.com/sethwv) for building such an awesome plugin system in Dispatcharr
 - [Streamlink](https://streamlink.github.io/) for their awesome API and stream handling capability
 - [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) who laid a lot of the groundwork for managing DASHDRM streams in streamlink!
 - [matthuisman](https://github.com/matthuisman) this guy is a local streaming legend in New Zealand. His code and work with streams has taught me heaps!
