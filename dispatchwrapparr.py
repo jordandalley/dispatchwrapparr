@@ -2,9 +2,6 @@
 
 """
 Dispatchwrapparr - A super wrapper for Dispatcharr
-
-Usage: dispatchwrapper.py -i <URL> -ua <User Agent String>
-Optional: -proxy <proxy server> -proxybypass <proxy bypass list> -clearkeys <json file/url> -cookies <txt file> -loglevel <level> -stream <selection> -subtitles -novariantcheck -novideo -noaudio -nosonginfo
 """
 
 from __future__ import annotations
@@ -12,7 +9,6 @@ import os
 import sys
 import re
 import signal
-import itertools
 import logging
 import base64
 import argparse
@@ -26,31 +22,18 @@ import threading
 import time
 import http.cookiejar
 import m3u8
-from typing import Any, Mapping
-from datetime import timedelta
 from urllib.parse import urlparse, parse_qs
-from collections import defaultdict
-from contextlib import suppress
-from streamlink.utils.parse import parse_xml
-from streamlink.plugins.dash import MPEGDASH
-from streamlink.plugins.hls import HLSPlugin
-from streamlink.exceptions import PluginError, FatalPluginError, NoPluginError, StreamError
-from streamlink.stream.dash import DASHStream, DASHStreamReader, DASHStreamWorker, DASHStreamWriter
-from streamlink.stream.dash.manifest import Representation, MPD, freeze_timeline
+from streamlink.exceptions import PluginError, FatalPluginError, NoPluginError
+from streamlink.session import Streamlink
 from streamlink.stream.ffmpegmux import FFMPEGMuxer
 from streamlink.stream.ffmpegmux import MuxedStream
-from streamlink.stream.http import HTTPStream
+from streamlink.stream.dash import DASHStream
 from streamlink.stream.hls import HLSStream
+from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
-from streamlink.session import Streamlink
-from streamlink.stream.hls.hls import HLSStreamWriter, HLSStreamReader
-from requests import Response
-from streamlink.stream.hls.segment import HLSSegment
-from streamlink.utils.l10n import Language
-from streamlink.utils.times import now
-from streamlink.plugins.http import HTTPStreamPlugin
+from streamlink.plugins.dash import MPEGDASH
 
-__version__ = "1.6.2"
+__version__ = "1.7.0"
 
 def parse_args():
     # Initial wrapper arguments
@@ -67,13 +50,14 @@ def parse_args():
     parser.add_argument("-ffmpeg", help="Optional: Specify a custom ffmpeg binary path")
     parser.add_argument("-ffmpeg_transcode_audio", help="Optional: When muxing with ffmpeg, specify an output audio format (eg. aac, eac3, ac3, copy)")
     parser.add_argument("-ffmpeg_nocopyts", action="store_true", help="Optional: Disable the copying of timestamps during muxing with ffmpeg")
-    parser.add_argument("-subtitles", action="store_true", help="Optional: Enable support for subtitles (if available)")
     parser.add_argument("-novariantcheck", action="store_true", help="Optional: Do not autodetect if stream is audio-only or video-only")
     parser.add_argument("-novideo", action="store_true", help="Optional: Forces muxing of a blank video track into a stream that contains no audio")
     parser.add_argument("-noaudio", action="store_true", help="Optional: Forces muxing of a silent audio track into a stream that contains no video")
     parser.add_argument("-nosonginfo", action="store_true", help="Optional: Disable song information during streaming radio plays")
     parser.add_argument("-loglevel", type=str, default="INFO", choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"], help="Enable logging and set log level. (default: INFO)")
     parser.add_argument("-v", "--version", action="version", version=f"Dispatchwrapparr {__version__}")
+    # Deprecated features
+    parser.add_argument("-subtitles", action="store_true", help=argparse.SUPPRESS, deprecated=True)
     args = parser.parse_args()
 
     # Enforce dependency for proxybypass, must be used with proxy
@@ -85,10 +69,10 @@ def parse_args():
     if sum(bool(f) for f in flags) > 1:
         parser.error("Arguments -novariantcheck, -novideo, -noaudio and -clearkeys can only be used individually")
 
-    # Check if directories exist
+    # Check if files and directories exist
     if args.ffmpeg:
-        if not os.path.isdir(args.ffmpeg):
-            parser.error(f"Argument -ffmpeg: The path '{args.ffmpeg}' does not exist!")
+        if not os.path.isfile(args.ffmpeg):
+            parser.error(f"Argument -ffmpeg: The file '{args.ffmpeg}' does not exist!")
 
     if args.streamlink_plugins:
         if not os.path.isdir(args.streamlink_plugins):
@@ -128,456 +112,25 @@ def configure_logging(level="INFO") -> logging.Logger:
     log = logging.getLogger("dispatchwrapparr")
     return log
 
-class FFMPEGMuxerDRM(FFMPEGMuxer):
+class SingleMuxedStream(Stream):
     """
-    An FFmpeg muxer class that handles clearkeys for DRM decryption
+    A wrapper class that allows forcing muxing of single streams for DRM decryption
     """
-
-    @classmethod
-    def _get_keys(cls, session):
-        return session.get_option("clearkeys") or []
-
-    def __init__(self, session, *streams, **kwargs):
-        super().__init__(session, *streams, **kwargs)
-        keys = self._get_keys(session)
-        input_index = 0
-        subtitles = self.session.get_option("mux-subtitles")
-
-        old_cmd = self._cmd.copy()
-        self._cmd = [old_cmd.pop(0)] 
-
-        self._cmd.extend(["-fflags", "+genpts"])
-
-        while len(old_cmd) > 0:
-            cmd = old_cmd.pop(0)
-            if cmd == "-i":
-                _ = old_cmd.pop(0)
-                self._cmd.extend(["-thread_queue_size", "5120"])
-                if keys:
-                    # safely pick the current key, or lock onto the last available key
-                    # (e.g. Video = keys[0], Audio = keys[1], Alt Audio = keys[1])
-                    current_key = keys[min(input_index, len(keys) - 1)]
-                    self._cmd.extend(["-decryption_key", current_key])
-                    input_index += 1
-
-                self._cmd.extend([cmd, _])
-            elif subtitles and cmd == "-c:a":
-                _ = old_cmd.pop(0)
-                self._cmd.extend([cmd, _])
-                self._cmd.extend(["-c:s", "copy"])
-            else:
-                self._cmd.append(cmd)
-
-        if self._cmd and (self._cmd[-1].startswith("pipe:") or not self._cmd[-1].startswith("-")):
-            final_output = self._cmd.pop()
-            self._cmd.extend(["-async", "1"])
-            self._cmd.extend(["-fps_mode", "passthrough"])
-            self._cmd.append(final_output)
-
-        log.debug("Unified FFmpeg Command: %s", self._cmd)
-
-class DASHStreamWriterDRM(DASHStreamWriter):
-    reader: DASHStreamReaderDRM
-    stream: DASHStreamDRM
-
-class DASHStreamWorkerDRM(DASHStreamWorker):
-    reader: DASHStreamReaderDRM
-    writer: DASHStreamWriterDRM
-    stream: DASHStreamDRM
-
-    def iter_segments(self):
-        init = True
-        back_off_factor = 1
-        while not self.closed:
-            # find the representation by ID
-            representation = self.mpd.get_representation(self.reader.ident)
-
-            if self.mpd.type == "static":
-                refresh_wait = 5
-            else:
-                refresh_wait = (
-                    max(
-                        self.mpd.minimumUpdatePeriod.total_seconds(),
-                        representation.period.duration.total_seconds() if representation else 0,
-                    )
-                    or 5
-                )
-
-            with self.sleeper(refresh_wait * back_off_factor):
-                if not representation:
-                    continue
-
-                iter_segments = representation.segments(
-                    sequence=self.sequence,
-                    init=init,
-                    # sync initial timeline generation between audio and video threads
-                    timestamp=self.reader.timestamp if init else None,
-                )
-                for segment in iter_segments:
-                    if init and not segment.init:
-                        self.sequence = segment.num
-                        init = False
-                    yield segment
-
-                # close worker if type is not dynamic (all segments were put into writer queue)
-                if self.mpd.type != "dynamic":
-                    self.close()
-                    return
-
-                if not self.reload():
-                    back_off_factor = max(back_off_factor * 1.3, 10.0)
-                else:
-                    back_off_factor = 1
-
-    def reload(self):
-        """Dispatchwrapparr modified reload func with period change detection"""
-        self.old_num_periods = len(self.mpd.periods)
-        self.old_periods = [f"{idx}{f' (id={p.id!r})' if p.id is not None else ''}" for idx, p in enumerate(self.mpd.periods)]
-
-        if self.closed:
-            return
-
-        self.reader.buffer.wait_free()
-        log.debug(f"Reloading DASH DRM manifest {self.reader.ident!r}")
-        res = self.session.http.get(
-            self.mpd.url,
-            exception=StreamError,
-            retries=self.manifest_reload_retries,
-            **self.stream.args,
-        )
-
-        new_mpd = MPD(
-            self.session.http.xml(res, ignore_ns=True),
-            base_url=self.mpd.base_url,
-            url=self.mpd.url,
-            timelines=self.mpd.timelines,
-        )
-
-        # get the current amount of periods before reload
-        self.new_num_periods = len(new_mpd.periods)
-
-        # check if period count has changed
-        if self.old_num_periods != self.new_num_periods:
-            log.debug(f"DASH DRM for REP {self.reader.ident[2]} and changed from {self.old_num_periods} to {self.new_num_periods} periods")
-            self.new_periods = [f"{idx}{f' (id={p.id!r})' if p.id is not None else ''}" for idx, p in enumerate(new_mpd.periods)]
-            log.debug(f"Old DASH DRM periods for REP {self.reader.ident[2]}: {', '.join(self.old_periods)}")
-            log.debug(f"New DASH DRM periods for REP {self.reader.ident[2]}: {', '.join(self.new_periods)}")
-            new_period_idx = next(
-                (idx for idx, p in enumerate(new_mpd.periods) if getattr(p, 'duration', None) in (None, 0)),
-                len(new_mpd.periods) - 1  # fallback: last period
-            )
-            log.debug(f"Auto-selected new DASH DRM period {new_period_idx} for REP {self.reader.ident[2]}")
-            # get new period id by index
-            new_period_id = new_mpd.periods[new_period_idx].id
-            # reader.ident is an immutable tuple (period_id, timeline_id, rep_id).
-            # Replace it by constructing a new tuple preserving the remaining parts.
-            try:
-                old_ident = getattr(self.reader, "ident", None)
-                if isinstance(old_ident, tuple):
-                    rest = old_ident[1:]
-                    self.reader.ident = (new_period_id,) + rest
-                else:
-                     # fallback: set a simple tuple with the new period id
-                    self.reader.ident = (new_period_id,)
-                log.debug("DASH DRM: updated reader.ident -> %r", getattr(self.reader, "ident", None))
-            except Exception:
-                log.exception("DASH DRM: failed to update reader.ident after period change")
-
-        """
-        Probe the new MPD to see if that representation has available segments (without iterating the whole timeline);
-        used to decide whether to adopt new_mpd (i.e. replace self.mpd) or keep the old one.
-        """
-        new_rep = new_mpd.get_representation(self.reader.ident)
-        with freeze_timeline(new_mpd):
-            changed = len(list(itertools.islice(new_rep.segments(), 1))) > 0
-
-        if changed:
-            self.mpd = new_mpd
-
-        return changed
-
-
-    def change_period(self):
-        # get the current amount of periods before reload
-        self.old_num_periods = len(self.mpd.periods)
-        # get the current period id
-        current_period = self.reader.ident[0]
-        # find the period index by period id
-        current_period_index = next(
-            (idx for idx, p in enumerate(self.mpd.periods) if p.id == current_period),
-            -1  # fallback: last period
-        )
-        log.debug(f"Current DASH DRM period index for REP {self.reader.ident[2]}: {current_period_index}")
-
-class DASHStreamReaderDRM(DASHStreamReader):
-    __worker__ = DASHStreamWorkerDRM
-    __writer__ = DASHStreamWriterDRM
-
-    worker: DASHStreamWorkerDRM
-    writer: DASHStreamWriterDRM
-    stream: DASHStreamDRM
-
-class DASHStreamDRM(DASHStream):
-    """
-    This is effectively a hacked up version of the 'DASHStream' class from Streamlink's dash.py (14/11/2025)
-    https://github.com/streamlink/streamlink/blob/94c964751be2b318cfcae6c4eb103aafaac6b75c/src/streamlink/stream/dash/dash.py
-    Modifications to the original include bypassing DRM checking and additional live edge control
-    """
-    __shortname__ = "dashdrm"
-    __dashdrm_live_edge__ = 10
-
-    @staticmethod
-    def parse_mpd(manifest: str, mpd_params: Mapping[str, Any]) -> MPD:
-        node = parse_xml(manifest, ignore_ns=True)
-
-        return MPD(node, **mpd_params)
-
-    @classmethod
-    def parse_manifest(
-        cls,
-        session: Streamlink,
-        url_or_manifest: str,
-        period: int | str = -1,
-        with_video_only: bool = False,
-        with_audio_only: bool = False,
-        **kwargs,
-    ) -> dict[str, DASHStreamDRM]:
-        """
-        Parse a DASH DRM manifest file and return its streams.
-
-        :param session: Streamlink session instance
-        :param url_or_manifest: URL of the manifest file or an XML manifest string
-        :param period: Which MPD period to use (index number (int) or ``id`` attribute (str)) for finding representations
-        :param with_video_only: Also return video-only streams, otherwise only return muxed streams
-        :param with_audio_only: Also return audio-only streams, otherwise only return muxed streams
-        :param kwargs: Additional keyword arguments passed to :meth:`requests.Session.request`
-        """
-
-        manifest, mpd_params = cls.fetch_manifest(session, url_or_manifest, **kwargs)
-
-        try:
-            mpd = cls.parse_mpd(manifest, mpd_params)
-        except Exception as err:
-            raise PluginError(f"Failed to parse MPD manifest: {err}") from err
-
-        # Increase the suggestedPresentationDelay to avoid stuttering playback
-        mpd.suggestedPresentationDelay += timedelta(seconds=cls.__dashdrm_live_edge__)
-        log.debug(f"MPEG-DASH Adjusted Presentation Delay: {mpd.suggestedPresentationDelay}")
-
-        source = mpd_params.get("url", "MPD manifest")
-        video: list[Representation | None] = [None] if with_audio_only else []
-        audio: list[Representation | None] = [None] if with_video_only else []
-
-        available_periods = [f"{idx}{f' (id={p.id!r})' if p.id is not None else ''}" for idx, p in enumerate(mpd.periods)]
-        log.debug(f"Available DASH periods: {', '.join(available_periods)}")
-
-        """
-        Select the period with duration=None or duration=0 if period==0 and multiple periods exist.
-        Ensures that we always select the livestream period by default in multi-period DASH manifests.
-        """
-
-        if len(mpd.periods) > 1:
-            period = next(
-                (idx for idx, p in enumerate(mpd.periods) if getattr(p, 'duration', None) in (None, 0)),
-                len(mpd.periods) - 1  # fallback: last period
-            )
-            log.debug(f"Auto-selected DASH period {period} for livestream with duration=None or duration=0")
-
-        try:
-            if isinstance(period, int):
-                # selects period by index
-                period_selection = mpd.periods[period]
-            else:
-                # selects period by ID
-                period_selection = mpd.periods_map[period]
-
-        except LookupError:
-            raise PluginError(
-                f"DASH period {period!r} not found. Select a valid period by index or by id attribute value.",
-            ) from None
-
-        """
-        Search for suitable video and audio representations. Modified to continue without DRM checks
-        """
-        for aset in period_selection.adaptationSets:
-            for rep in aset.representations:
-                if rep.mimeType.startswith("video"):
-                    video.append(rep)
-                elif rep.mimeType.startswith("audio"):  # pragma: no branch
-                    audio.append(rep)
-
-        if not video:
-            video.append(None)
-        if not audio:
-            audio.append(None)
-
-        locale = session.localization
-        locale_lang = locale.language
-        lang = None
-        available_languages = set()
-
-        # if the locale is explicitly set, prefer that language over others
-        for aud in audio:
-            if aud and aud.lang:
-                available_languages.add(aud.lang)
-                with suppress(LookupError):
-                    if locale.explicit and aud.lang and Language.get(aud.lang) == locale_lang:
-                        lang = aud.lang
-
-        if not lang:
-            # filter by the first language that appears
-            lang = audio[0].lang if audio[0] else None
-
-        log.debug(
-            f"Available languages for DASH audio streams: {', '.join(available_languages) or 'NONE'} (using: {lang or 'n/a'})",
-        )
-
-        # if the language is given by the stream, filter out other languages that do not match
-        if len(available_languages) > 1:
-            audio = [a for a in audio if a and (a.lang is None or a.lang == lang)]
-
-        ret = []
-        for vid, aud in itertools.product(video, audio):
-            if not vid and not aud:
-                continue
-
-            stream = DASHStreamDRM(session, mpd, vid, aud, **kwargs)
-            stream_name = []
-
-            if vid:
-                stream_name.append(f"{vid.height or vid.bandwidth_rounded:0.0f}{'p' if vid.height else 'k'}")
-            if aud and len(audio) > 1:
-                stream_name.append(f"a{aud.bandwidth:0.0f}k")
-            ret.append(("+".join(stream_name), stream))
-
-        # rename duplicate streams
-        dict_value_list = defaultdict(list)
-        for k, v in ret:
-            dict_value_list[k].append(v)
-
-        def sortby_bandwidth(dash_stream: DASHStreamDRM) -> float:
-            if dash_stream.video_representation:
-                return dash_stream.video_representation.bandwidth
-            if dash_stream.audio_representation:
-                return dash_stream.audio_representation.bandwidth
-            return 0  # pragma: no cover
-
-        ret_new = {}
-        for q in dict_value_list:
-            items = dict_value_list[q]
-
-            with suppress(AttributeError):
-                items = sorted(items, key=sortby_bandwidth, reverse=True)
-
-            for n in range(len(items)):
-                if n == 0:
-                    ret_new[q] = items[n]
-                elif n == 1:
-                    ret_new[f"{q}_alt"] = items[n]
-                else:
-                    ret_new[f"{q}_alt{n}"] = items[n]
-
-        # Return a list of dashdrm streams
-        return ret_new
+    def __init__(self, session, stream):
+        super().__init__(session)
+        self.stream = stream
 
     def open(self):
-        video, audio = None, None
-        rep_video, rep_audio = self.video_representation, self.audio_representation
-
-        timestamp = now()
-
-        if rep_video:
-            video = DASHStreamReaderDRM(self, rep_video, timestamp)
-            log.debug(f"Opening DASHDRM reader for: {rep_video.ident!r} - {rep_video.mimeType}")
-
-        if rep_audio:
-            audio = DASHStreamReaderDRM(self, rep_audio, timestamp)
-            log.debug(f"Opening DASHDRM reader for: {rep_audio.ident!r} - {rep_audio.mimeType}")
-
-        """
-        Always pass to muxer (ffmpeg) for DRM streams as this handles the decryption
-        """
-        if video and audio and FFMPEGMuxerDRM.is_usable(self.session):
-            video.open()
-            audio.open()
-            return FFMPEGMuxerDRM(self.session, video, audio).open()
-        elif video:
-            video.open()
-            return FFMPEGMuxerDRM(self.session, video).open()
-        elif audio:
-            audio.open()
-            return FFMPEGMuxerDRM(self.session, audio).open()
-
-class DASHPluginDRM(MPEGDASH):
-    # clear out matchers to prevent url checking
-    matchers = []
-    def _get_streams(self):
-        return DASHStreamDRM.parse_manifest(self.session, self.url)
-
-class HLSStreamDRMWriter(HLSStreamWriter):
-    """
-    Writer that bypasses Streamlink's internal AES-128/SAMPLE-AES handling.
-    Raw encrypted segments are passed through unchanged.
-    """
-
-    def _write(self, segment: HLSSegment, result: Response, is_map: bool):
-        """
-        Writes raw segment bytes directly to buffer, skipping Streamlink decryptor logic.
-        """
-        try:
-            for chunk in result.iter_content(self.WRITE_CHUNK_SIZE):
-                if not chunk:
-                    continue
-                self.reader.buffer.write(chunk)
-        except Exception as err:
-            log.error("Segment %s download failed: %s", segment.num, err)
-            return
-
-class HLSStreamDRMReader(HLSStreamReader):
-    __writer__ = HLSStreamDRMWriter
-
-class HLSStreamDRM(HLSStream):
-    """
-    Inherits and extends Streamlink's HLSStream class and modifies functions
-    for DRM handling.
-    """
-    __shortname__ = "hlsdrm"
-    __reader__ = HLSStreamDRMReader
-
-    def open(self):
-        reader = self.__reader__(self)
-        log.debug(f"HLSDRM: Opening HLS-DRM reader for {self.url}")
-        reader.open()
-
-        # We no longer wrap the individual stream in FFmpeg!
-        # The new global FFMPEGMuxerDRM will handle both readers at the end.
-        return reader
-
-class HLSPluginDRM(HLSPlugin):
-    # clear out matchers to prevent url checking
-    matchers = []
-    def _get_streams(self):
-        streams = HLSStreamDRM.parse_variant_playlist(self.session, self.url)
-        return streams or {"live": HLSStreamDRM(self.session, self.url)}
-
-class HLSPluginForced(HLSPlugin):
-    # clear out matchers to prevent url checking
-    matchers = []
-    def _get_streams(self):
-        streams = HLSStream.parse_variant_playlist(self.session, self.url)
-        return streams or {"live": HLSStream(self.session, self.url)}
-
-class DASHPluginForced(MPEGDASH):
-    # clear out matchers to prevent url checking
-    matchers = []
-    def _get_streams(self):
-        return DASHStream.parse_manifest(self.session, self.url)
-
-class HTTPStreamPluginForced(HTTPStreamPlugin):
-    # clear out matchers to prevent url checking
-    matchers = []
-    def _get_streams(self):
-        return {"live": HTTPStream(self.session, self.url)}
+        reader = self.stream.open()
+        
+        fmt = self.session.options.get("ffmpeg-fout") or "mpegts"
+        copyts = self.session.options.get("ffmpeg-copyts")
+        if copyts is None:
+            copyts = True
+            
+        # Feed the reader into the native (now patched) FFmpeg muxer
+        muxer = FFMPEGMuxer(self.session, reader, format=fmt, copyts=copyts)
+        return muxer.open()
 
 class PlayRadio:
     """
@@ -586,9 +139,10 @@ class PlayRadio:
     the case of available metadata, displays song information for use on TV's.
     """
 
-    def __init__(self, url, ffmpeg_loglevel, headers, cookies, stream_type=None, resolution="854x480", fps=25, acodec="aac", vcodec="libx264", fontsize=22, update_interval=5):
+    def __init__(self, url, ffmpeg, ffmpeg_loglevel, headers, cookies, stream_type=None, resolution="854x480", fps=25, acodec="aac", vcodec="libx264", fontsize=22, update_interval=5):
         self.url = url
         self.stream_type = stream_type
+        self.ffmpeg = ffmpeg
         self.ffmpeg_loglevel = ffmpeg_loglevel
         self.headers = headers or {}
         self.cookies = cookies or {}
@@ -612,7 +166,7 @@ class PlayRadio:
         Launch FFmpeg and return a file-like object (self) for reading stdout.
         """
         cmd = [
-            "ffmpeg",
+            self.ffmpeg,
             "-hide_banner",
             "-loglevel", self.ffmpeg_loglevel,
         ]
@@ -971,12 +525,16 @@ def parse_fragment_headers(raw_header_values: str | list[str] | None) -> dict[st
 
     return parsed_headers
 
-def detect_streams(session, url, clearkey, subtitles):
+def detect_streams(session, url, clearkey):
     """
     Performs extended plugin matching for Streamlink
     Returns a dict of possible streams
     """
 
+    # This is a monkey patch of MPEGDASH._get_streams to get around some streamlink rigidities
+    def _dashdrm_get_streams():
+        return DASHStream.parse_manifest(session, url, period=-1)
+    
     def find_by_mime_type(session, url):
         try:
             # Use streamlink's existing requests session. I used a GET here because some servers don't allow HEAD.
@@ -998,7 +556,7 @@ def detect_streams(session, url, clearkey, subtitles):
             stream_type = "hls"
         # MPEG-DASH stream detected by content-type
         # Added text/xml for lazy CDN's that don't set mime type to dash+xml
-        elif "dash+xml" or "text/xml" in content_type:
+        elif "dash+xml" in content_type or "text/xml" in content_type:
             stream_type = "dash"
         # Standard HTTP Stream detected by content-type. Return with "live" as only one variant will exist.
         elif "application/octet-stream" in content_type or content_type.startswith("audio/") or content_type.startswith("video/") or content_type.endswith("/ogg"):
@@ -1010,45 +568,42 @@ def detect_streams(session, url, clearkey, subtitles):
 
     try:
         log.debug("First pass plugin matching with Streamlink Plugin Resolver...")
-        plugin_name, plugin_cls, resolved_url = session.resolve_url(url)
+        plugin_name, plugin_cls, url = session.resolve_url(url)
         log.debug(f"Plugin '{plugin_name}' matched via resolver")
-        plugin = plugin_cls(session, resolved_url)
+        plugin = plugin_cls(session, url)
 
-        if clearkey:
-            stream_type = None
-            try:
-                stream_type = find_by_mime_type(session, resolved_url)
-            except Exception:
-                log.debug("Unable to detect stream type for DRM handling via plugin resolver", exc_info=True)
-            if stream_type == "dash":
-                log.debug("DASH DRM detected via Plugin Resolver")
-                plugin = DASHPluginDRM(session, resolved_url)
-            elif stream_type == "hls":
-                log.debug("HLS DRM detected via Plugin Resolver")
-                plugin = HLSPluginDRM(session, resolved_url)
+        
+        if plugin_name == "dash" and clearkey:
+            plugin._get_streams = _dashdrm_get_streams
+
+        return plugin.streams()
 
     except NoPluginError:
         log.debug("Second pass plugin matching via MIME Type Resolver...")
         stream_type = find_by_mime_type(session, url)
+        
         if stream_type == "dash" and clearkey:
-            log.debug("DASH DRM Detected via MIME Type Resolver")
-            plugin = DASHPluginDRM(session, url)
-        elif stream_type == "hls" and clearkey:
-            log.debug("HLS DRM Detected via MIME Type Resolver")
-            plugin = HLSPluginDRM(session, url)
-        elif stream_type == "dash" and not clearkey:
+            log.debug("DASH DRM matched. Forcing period=-1 to select the live edge.")
+            plugin = MPEGDASH(session, url)
+            plugin._get_streams = _dashdrm_get_streams
+            return plugin.streams()
+        
+        elif stream_type == "dash":
             log.debug("DASH Stream Detected via MIME Type Resolver")
-            plugin = DASHPluginForced(session, url)
-        elif stream_type == "hls" and not clearkey:
+            plugin = MPEGDASH(session, url)
+            return plugin.streams()
+            
+        elif stream_type == "hls":
             log.debug("HLS Stream Detected via MIME Type Resolver")
-            plugin = HLSPluginForced(session, url)
-        elif stream_type == "http" and not clearkey:
+            streams = HLSStream.parse_variant_playlist(session, url)
+            return streams or {"live": HLSStream(session, url)}
+            
+        elif stream_type == "http":
             log.debug("HTTP Stream Detected via MIME Type Resolver")
-            plugin = HTTPStreamPluginForced(session, url)
+            return {"live": HTTPStream(session, url)}
+            
         else:
             raise PluginError("Could not detect stream type or no suitable plugin found.")
-
-    return plugin.streams()
 
 def check_stream_variant(stream, session=None):
     """ Checks for different stream variants:
@@ -1109,14 +664,14 @@ def check_stream_variant(stream, session=None):
     # Default/fallback
     return 0
 
-def create_silent_audio(session, ffmpeg_loglevel) -> Stream:
+def create_silent_audio(session, ffmpeg, ffmpeg_loglevel) -> Stream:
     """
     Return a Streamlink-compatible Stream that produces continuous silent AAC audio.
     Uses ffmpeg with anullsrc.
     """
-    ffmpeg_bin = session.get_option("ffmpeg-ffmpeg") or "ffmpeg"
+
     cmd = [
-        ffmpeg_bin,
+        ffmpeg,
         "-loglevel", ffmpeg_loglevel,
         "-f", "lavfi",
         "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
@@ -1139,7 +694,6 @@ def create_silent_audio(session, ffmpeg_loglevel) -> Stream:
 def process_keys(clearkeys):
     """
     Process provided clearkeys to ensure they are in the correct format for ffmpeg
-    Adapted from code by Titus-AU: https://github.com/titus-au/
     """
     # Split the string by commas to support multiple keys (e.g., kid1:key1,kid2:key2)
     keys = [k.strip() for k in clearkeys.split(",")]
@@ -1177,9 +731,7 @@ def process_keys(clearkeys):
 def main():
     # Set log as global var
     global log
-    # Monkey patch custom FFMPEG muxer
-    import streamlink.stream.ffmpegmux
-    streamlink.stream.ffmpegmux.FFMPEGMuxer = FFMPEGMuxerDRM
+    
     # Collect cli args from argparse and pass initialise dw_opts
     dw_opts = parse_args()
     # Initialise dw_opts attributes that don't have a cli argument
@@ -1207,6 +759,51 @@ def main():
     # If -clearkeys argument is supplied and clearkey is None, search for a URL match in supplied file/url
     if dw_opts.clearkeys and not dw_opts.clearkey:
         dw_opts.clearkey = find_clearkeys_by_url(url,dw_opts.clearkeys)
+
+    if dw_opts.clearkey:
+        # Monkey patch custom FFMPEG DRM muxer if clearkey is supplied
+        # mutate the native FFMPEGMuxer class to ensure ALL plugins use the DRM logic.
+        # Gets around issues with how DASH instantiates the streamlink ffmpeg muxer :(
+        if not hasattr(FFMPEGMuxer, "_is_drm_patched"):
+            _original_ffmpegmuxer_init = FFMPEGMuxer.__init__
+
+            def _patched_ffmpegmuxer_init(self, session, *streams, **kwargs):
+                # 1. Call the original Streamlink initialization
+                _original_ffmpegmuxer_init(self, session, *streams, **kwargs)
+                
+                # 2. Apply our custom DRM modifications to self._cmd
+                keys = session.get_option("clearkeys") or []
+                input_index = 0
+
+                old_cmd = self._cmd.copy()
+                self._cmd = [old_cmd.pop(0)]
+                self._cmd.extend(["-fflags", "+genpts"])
+
+                while len(old_cmd) > 0:
+                    cmd = old_cmd.pop(0)
+                    if cmd == "-i":
+                        _ = old_cmd.pop(0)
+                        self._cmd.extend(["-thread_queue_size", "5120"])
+                        if keys:
+                            # safely pick the current key, or lock onto the last available key
+                            current_key = keys[min(input_index, len(keys) - 1)]
+                            self._cmd.extend(["-decryption_key", current_key])
+                            input_index += 1
+                        self._cmd.extend([cmd, _])
+                    else:
+                        self._cmd.append(cmd)
+
+                if self._cmd and (self._cmd[-1].startswith("pipe:") or not self._cmd[-1].startswith("-")):
+                    final_output = self._cmd.pop()
+                    self._cmd.extend(["-async", "1"])
+                    self._cmd.extend(["-fps_mode", "passthrough"])
+                    self._cmd.append(final_output)
+
+                log.debug("FFmpeg DRM Muxer Command: %s", self._cmd)
+
+            # Bind patched __init__ directly to the native streamlink class
+            FFMPEGMuxer.__init__ = _patched_ffmpegmuxer_init
+            FFMPEGMuxer._is_drm_patched = True
 
     """
     Begin setting up the Streamlink Session
@@ -1263,7 +860,9 @@ def main():
     # Set generic session options for Streamlink
     session.set_option("stream-segment-threads", 2)
     # Start HLS stream further in from the live edge
-    session.set_option("hls-live-edge", 6)
+    session.set_option("hls-live-edge", 4)
+    # Enable segment streaming to smooth inputs for HLS streams
+    session.set_option("hls-segment-stream-data", True)
     # If cli -proxy argument supplied
     if dw_opts.proxy:
         # Set proxies as env vars for streamlink/requests/ffmpeg et al
@@ -1278,11 +877,6 @@ def main():
             proxybypass = dw_opts.proxybypass.strip("*") # strip any globs off as they're no longer supported
             os.environ["NO_PROXY"] = proxybypass
             log.info(f"Proxy Bypass: '{dw_opts.proxybypass}'")
-
-    # If -subtitles arg supplied
-    if dw_opts.subtitles:
-        session.set_option("mux-subtitles", True)
-        log.info(f"Mux Subtitles (Experimental): Enabled")
 
     """
     FFmpeg Options that apply to all streams should they require muxing
@@ -1299,6 +893,9 @@ def main():
             dw_opts.ffmpeg = ffmpeg_check
             log.info(f"FFmpeg: Found at '{dw_opts.ffmpeg}'")
             session.set_option("ffmpeg-ffmpeg", dw_opts.ffmpeg)
+        else:
+            # set global ffmpeg if no other found
+            session.set_option("ffmpeg-ffmpeg", "ffmpeg")
     if dw_opts.ffmpeg_transcode_audio:
         session.set_option("ffmpeg-audio-transcode", dw_opts.ffmpeg_transcode_audio)
         log.info(f"FFmpeg: Transcode audio to '{dw_opts.ffmpeg_transcode_audio}'")
@@ -1310,13 +907,22 @@ def main():
     session.set_option("ffmpeg-loglevel", dw_opts.ffmpeg_loglevel) # Set ffmpeg loglevel
     session.set_option("ffmpeg-verbose", True) # Pass ffmpeg stderr through to streamlink
     session.set_option("ffmpeg-fout", "mpegts") # Encode as mpegts when ffmpeg muxing (not matroska like default)
+    if dw_opts.clearkey:
+        # User supplied a clearkey. Enable Streamlink's native encrypted passthrough.
+        session.set_option("stream-passthrough-encrypted", True)
+        # Process clearkeys into format that ffmpeg understands
+        processed_keys = process_keys(dw_opts.clearkey)
+        # Set processed keys as session option
+        session.options.set("clearkeys", processed_keys)
+        log.info(f"DRM Clearkey(s): '{dw_opts.clearkey}' -> {processed_keys}")
+
     """
     Stream detection and plugin loading
     """
 
     try:
         # Pass stream detection off to the detect_streams function. Returns a dict of available streams in varying quality.
-        streams = detect_streams(session, url, dw_opts.clearkey, dw_opts.subtitles)
+        streams = detect_streams(session, url, dw_opts.clearkey)
     except Exception as e:
         log.error(f"Stream setup failed: {e}")
         return
@@ -1367,7 +973,7 @@ def main():
 
     if dw_opts.noaudio and not dw_opts.novideo and not dw_opts.clearkey:
         log.info("No Audio: Muxing silent audio into supplied video stream")
-        audio_stream = create_silent_audio(session,dw_opts.ffmpeg_loglevel)
+        audio_stream = create_silent_audio(session,dw_opts.ffmpeg,dw_opts.ffmpeg_loglevel)
         video_stream = stream
         stream = MuxedStream(session, video_stream, audio_stream)
 
@@ -1379,17 +985,17 @@ def main():
                 stream_type = "hls"
             elif isinstance(stream, HTTPStream):
                 stream_type = "icy"
-        stream = PlayRadio(url, dw_opts.ffmpeg_loglevel, headers=None, cookies=None, stream_type=stream_type)
+        stream = PlayRadio(url, session.options.get("ffmpeg-ffmpeg"), dw_opts.ffmpeg_loglevel, headers=None, cookies=None, stream_type=stream_type)
 
     elif dw_opts.noaudio and dw_opts.novideo:
         log.warning("Both 'noaudio' and 'novideo' specified. Ignoring both.")
 
     if dw_opts.clearkey:
-        # Process clearkeys into format that ffmpeg understands
-        processed_keys = process_keys(dw_opts.clearkey)
-        # Set processed keys as session option
-        session.options.set("clearkeys", processed_keys)
-        log.info(f"DRM Clearkey(s): '{dw_opts.clearkey}' -> {processed_keys}")
+        # If clearkey is provided, regardless of whether or not its a single or double stream
+        # we need to mux because ffmpeg handles the decryption
+        if not isinstance(stream, (MuxedStream, DASHStream)):
+            log.debug("Simple stream detected. Wrapping in SingleMuxedStream to force FFmpeg.")
+            stream = SingleMuxedStream(session, stream)
 
     try:
         log.info("Starting stream...")

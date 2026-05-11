@@ -1,10 +1,10 @@
 {
   "name": "Dispatchwrapparr",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "description": "An intelligent DRM/Clearkey capable stream profile for Dispatcharr",
   "author": "jordandalley",
   "maintainers": ["michaelmurfy"],
-  "min_dispatcharr_version": "v0.21.0",
+  "min_dispatcharr_version": "v0.24.0",
   "help_url": "https://github.com/jordandalley/dispatchwrapparr",
   "license": "MIT",
   "repo_url": "https://github.com/jordandalley/dispatchwrapparr",
