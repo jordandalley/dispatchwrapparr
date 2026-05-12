@@ -13,10 +13,22 @@ class Plugin:
     version = "1.7.0"
     description = "An intelligent DRM/Clearkey capable stream profile for Dispatcharr"
     profile_name = "Dispatchwrapparr"
-    install_path = "/data/dispatchwrapparr/dispatchwrapparr.py"
+    # Directory where dispatchwrapparr will be copied to
+    dw_path = "/data/dispatchwrapparr"
+    dw_dst = dw_path + "/dispatchwrapparr.py"
+    # Directory where the streamlink DRM plugins will be copied to
+    drm_plugin_path = dw_path + "/drmplugins"
+    dashdrm_dst = drm_plugin_path + "/dashdrm.py"
+    hlsdrm_dst = drm_plugin_path + "/hlsdrm.py"
+    # Finds the directory where the plugin is installed
     plugin_dir = Path(__file__).resolve().parent
-    install_source = plugin_dir / "dispatchwrapparr.py"
+    # Source of bundled python code for install
+    dw_src = plugin_dir / "dispatchwrapparr.py"
+    dashdrm_src = plugin_dir / "dashdrm.py"
+    hlsdrm_src = plugin_dir / "hlsdrm.py"
+    # Generate the plugin key
     plugin_key = plugin_dir.name.replace(" ", "_").lower()
+    # Default stream profile name
     default_profile_name = "Dispatchwrapparr"
 
     @staticmethod
@@ -38,7 +50,7 @@ class Plugin:
             self.context = None
             self.settings = {}
 
-        if os.path.isfile(self.install_path) is False:
+        if os.path.isfile(self.dw_dst) is False:
             # on load, check if the file exists. If not, invoke installation
             self.install()
         else:
@@ -126,10 +138,10 @@ class Plugin:
     # Versioning functions
     def check_local_version(self):
         """Returns (version_string_or_None, error_string_or_None)"""
-        if os.path.isfile(self.install_path):
+        if os.path.isfile(self.dw_dst):
             try:
                 result = subprocess.run(
-                    ["python3", self.install_path, "-v"],
+                    ["python3", self.dw_dst, "-v"],
                     capture_output=True,
                     text=True,
                 )
@@ -149,13 +161,17 @@ class Plugin:
 
     # Handles installation and updates
     def install(self):
-        path = os.path.dirname(self.install_path)
-        os.makedirs(path, exist_ok=True)
+        # Make dispatchwrapparr directory
+        os.makedirs(self.dw_path, exist_ok=True)
+        # Make drm plugin directory
+        os.makedirs(self.drm_plugin_path, exist_ok=True)  
         # copy self.install_source from source to destination
-        shutil.copy2(self.install_source, self.install_path)
-        # set executable
-        st = os.stat(self.install_path)
-        os.chmod(self.install_path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        shutil.copy2(self.dw_src, self.dw_dst)
+        shutil.copy2(self.dashdrm_src, self.dashdrm_dst)
+        shutil.copy2(self.hlsdrm_src, self.hlsdrm_dst)
+        # set dispatchwrapparr.py executable
+        st = os.stat(self.dw_dst)
+        os.chmod(self.dw_dst, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     
     # Check if URL is valid
     def is_valid_url(self, url: str) -> bool:
@@ -182,7 +198,7 @@ class Plugin:
     def generate_profile(self):
         if (self.settings.get("profile_name") or None) is None:
             return {"status": "error", "message": "Please specify a profile name!"}
-        path = os.path.dirname(self.install_path)
+        path = os.path.dirname(self.dw_dst)
         profile_name = self.settings.get("profile_name")
         if StreamProfile.objects.filter(name__iexact=profile_name).first():
             return {"status": "error", "message": f"Profile '{profile_name}' already exists, please choose a different name!"}
@@ -231,7 +247,7 @@ class Plugin:
 
         profile = StreamProfile(
             name=profile_name,
-            command=self.install_path,
+            command=self.dw_dst,
             parameters=parameter_string,
             locked=False,
             is_active=True,

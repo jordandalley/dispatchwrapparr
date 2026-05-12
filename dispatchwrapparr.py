@@ -23,15 +23,14 @@ import time
 import http.cookiejar
 import m3u8
 from urllib.parse import urlparse, parse_qs
-from streamlink.exceptions import PluginError, FatalPluginError, NoPluginError
+from streamlink.exceptions import PluginError, NoPluginError
 from streamlink.session import Streamlink
-from streamlink.stream.ffmpegmux import FFMPEGMuxer
 from streamlink.stream.ffmpegmux import MuxedStream
-from streamlink.stream.dash import DASHStream
 from streamlink.stream.hls import HLSStream
 from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.plugins.dash import MPEGDASH
+from streamlink.options import Options
 
 __version__ = "1.7.0"
 
@@ -111,26 +110,6 @@ def configure_logging(level="INFO") -> logging.Logger:
     # Your application logger
     log = logging.getLogger("dispatchwrapparr")
     return log
-
-class SingleMuxedStream(Stream):
-    """
-    A wrapper class that allows forcing muxing of single streams for DRM decryption
-    """
-    def __init__(self, session, stream):
-        super().__init__(session)
-        self.stream = stream
-
-    def open(self):
-        reader = self.stream.open()
-        
-        fmt = self.session.options.get("ffmpeg-fout") or "mpegts"
-        copyts = self.session.options.get("ffmpeg-copyts")
-        if copyts is None:
-            copyts = True
-            
-        # Feed the reader into the native (now patched) FFmpeg muxer
-        muxer = FFMPEGMuxer(self.session, reader, format=fmt, copyts=copyts)
-        return muxer.open()
 
 class PlayRadio:
     """
@@ -531,10 +510,35 @@ def detect_streams(session, url, clearkey):
     Returns a dict of possible streams
     """
 
-    # This is a monkey patch of MPEGDASH._get_streams to get around some streamlink rigidities
-    def _dashdrm_get_streams():
-        return DASHStream.parse_manifest(session, url, period=-1)
-    
+    def invoke_drm_plugin(session, url, type, clearkey):
+        # Get the dir that dispatchwrapparr.py was loaded from
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Append drmplugins/ to the above
+        plugins_dir = os.path.join(script_dir, "drmplugins/")
+        # Load the plugins from the directory
+        session.plugins.load_path(plugins_dir)
+        log.debug(f"Loaded DRM Streamlink plugins from: {plugins_dir}")
+        # Begin plugin options
+        plugin_options = Options()
+        # Set decryption keys for HLS/DASH DRM plugins
+        if clearkey:
+            plugin_options.set("decryption-key", [clearkey])
+        # Set plugin matcher URL's for matching
+        if type == "dash":
+            url = f"dashdrm://{url}"
+            #plugin_options.set("presentation-delay", 10)
+            plugin_options.set("video-timescale", 50000)
+            #plugin_options.set("always-play-last-period", True)
+            plugin_options.set("availability-grace", 10)
+        elif type == "hls":
+            url = f"hlsdrm://{url}"
+        # Match plugin through new URL
+        plugin_name, plugin_cls, url = session.resolve_url(url)
+        plugin = plugin_cls(session, url, options=plugin_options)
+        log.debug(f"Plugin '{plugin_name}' matched via resolver")
+        # Return list of streams
+        return plugin.streams()
+
     def find_by_mime_type(session, url):
         try:
             # Use streamlink's existing requests session. I used a GET here because some servers don't allow HEAD.
@@ -569,29 +573,40 @@ def detect_streams(session, url, clearkey):
     try:
         log.debug("First pass plugin matching with Streamlink Plugin Resolver...")
         plugin_name, plugin_cls, url = session.resolve_url(url)
-        log.debug(f"Plugin '{plugin_name}' matched via resolver")
         plugin = plugin_cls(session, url)
-
-        
         if plugin_name == "dash" and clearkey:
-            plugin._get_streams = _dashdrm_get_streams
-
-        return plugin.streams()
-
+            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
+            return streams
+        elif plugin_name == "dash":
+            # use titus-au dashdrm plugin for normal dash streams
+            streams = invoke_drm_plugin(session, url, plugin_name, None)
+            return streams
+        elif plugin_name == "hls" and clearkey:
+            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
+            return streams
+        else:
+            log.debug(f"Plugin '{plugin_name}' matched via resolver")
+            return plugin.streams()
+        
     except NoPluginError:
         log.debug("Second pass plugin matching via MIME Type Resolver...")
         stream_type = find_by_mime_type(session, url)
         
         if stream_type == "dash" and clearkey:
-            log.debug("DASH DRM matched. Forcing period=-1 to select the live edge.")
-            plugin = MPEGDASH(session, url)
-            plugin._get_streams = _dashdrm_get_streams
-            return plugin.streams()
+            log.debug("DASH DRM matched via MIME Type Resolver")
+            streams = invoke_drm_plugin(session, url, stream_type, clearkey)
+            return streams
+        
+        elif stream_type == "hls" and clearkey:
+            log.debug("HLS DRM matched via MIME Type Resolver")
+            streams = invoke_drm_plugin(session, url, stream_type, clearkey)
+            return streams
         
         elif stream_type == "dash":
             log.debug("DASH Stream Detected via MIME Type Resolver")
-            plugin = MPEGDASH(session, url)
-            return plugin.streams()
+            # use titus-au dashdrm plugin for normal dash streams
+            streams = invoke_drm_plugin(session, url, stream_type, None)
+            return streams
             
         elif stream_type == "hls":
             log.debug("HLS Stream Detected via MIME Type Resolver")
@@ -691,43 +706,6 @@ def create_silent_audio(session, ffmpeg, ffmpeg_loglevel) -> Stream:
 
     return SilentAudioStream(session)
 
-def process_keys(clearkeys):
-    """
-    Process provided clearkeys to ensure they are in the correct format for ffmpeg
-    """
-    # Split the string by commas to support multiple keys (e.g., kid1:key1,kid2:key2)
-    keys = [k.strip() for k in clearkeys.split(",")]
-    return_keys = []
-
-    for k in keys:
-        key = k.split(':')
-        key_len = len(key[-1])
-        log.debug('Decryption Key %s has %s digits', key[-1], key_len)
-
-        if key_len in (21, 22, 23, 24):
-            log.debug("Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
-            b64_string = key[-1]
-            padding = (-len(b64_string)) % 4
-            if padding:
-                b64_string = b64_string + ("=" * padding)
-            b64_key = base64.urlsafe_b64decode(b64_string).hex()
-            if b64_key:
-                key[-1] = b64_key
-                key_len = len(b64_key)
-                log.debug('Decryption Key (post base64 decode) is %s and has %s digits', key[-1], key_len)
-
-        if key_len == 32:
-            try:
-                int(key[-1], 16)
-            except ValueError:
-                raise FatalPluginError("Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
-        elif key_len != 32:
-            raise FatalPluginError("Expecting 128bit key in 32 hex digits.")
-
-        return_keys.append(key[-1])
-
-    return return_keys
-
 def main():
     # Set log as global var
     global log
@@ -759,51 +737,6 @@ def main():
     # If -clearkeys argument is supplied and clearkey is None, search for a URL match in supplied file/url
     if dw_opts.clearkeys and not dw_opts.clearkey:
         dw_opts.clearkey = find_clearkeys_by_url(url,dw_opts.clearkeys)
-
-    if dw_opts.clearkey:
-        # Monkey patch custom FFMPEG DRM muxer if clearkey is supplied
-        # mutate the native FFMPEGMuxer class to ensure ALL plugins use the DRM logic.
-        # Gets around issues with how DASH instantiates the streamlink ffmpeg muxer :(
-        if not hasattr(FFMPEGMuxer, "_is_drm_patched"):
-            _original_ffmpegmuxer_init = FFMPEGMuxer.__init__
-
-            def _patched_ffmpegmuxer_init(self, session, *streams, **kwargs):
-                # 1. Call the original Streamlink initialization
-                _original_ffmpegmuxer_init(self, session, *streams, **kwargs)
-                
-                # 2. Apply our custom DRM modifications to self._cmd
-                keys = session.get_option("clearkeys") or []
-                input_index = 0
-
-                old_cmd = self._cmd.copy()
-                self._cmd = [old_cmd.pop(0)]
-                self._cmd.extend(["-fflags", "+genpts"])
-
-                while len(old_cmd) > 0:
-                    cmd = old_cmd.pop(0)
-                    if cmd == "-i":
-                        _ = old_cmd.pop(0)
-                        self._cmd.extend(["-thread_queue_size", "5120"])
-                        if keys:
-                            # safely pick the current key, or lock onto the last available key
-                            current_key = keys[min(input_index, len(keys) - 1)]
-                            self._cmd.extend(["-decryption_key", current_key])
-                            input_index += 1
-                        self._cmd.extend([cmd, _])
-                    else:
-                        self._cmd.append(cmd)
-
-                if self._cmd and (self._cmd[-1].startswith("pipe:") or not self._cmd[-1].startswith("-")):
-                    final_output = self._cmd.pop()
-                    self._cmd.extend(["-async", "1"])
-                    self._cmd.extend(["-fps_mode", "passthrough"])
-                    self._cmd.append(final_output)
-
-                log.debug("FFmpeg DRM Muxer Command: %s", self._cmd)
-
-            # Bind patched __init__ directly to the native streamlink class
-            FFMPEGMuxer.__init__ = _patched_ffmpegmuxer_init
-            FFMPEGMuxer._is_drm_patched = True
 
     """
     Begin setting up the Streamlink Session
@@ -860,7 +793,7 @@ def main():
     # Set generic session options for Streamlink
     session.set_option("stream-segment-threads", 2)
     # Start HLS stream further in from the live edge
-    session.set_option("hls-live-edge", 4)
+    session.set_option("hls-live-edge", 6)
     # Enable segment streaming to smooth inputs for HLS streams
     session.set_option("hls-segment-stream-data", True)
     # If cli -proxy argument supplied
@@ -907,15 +840,7 @@ def main():
     session.set_option("ffmpeg-loglevel", dw_opts.ffmpeg_loglevel) # Set ffmpeg loglevel
     session.set_option("ffmpeg-verbose", True) # Pass ffmpeg stderr through to streamlink
     session.set_option("ffmpeg-fout", "mpegts") # Encode as mpegts when ffmpeg muxing (not matroska like default)
-    if dw_opts.clearkey:
-        # User supplied a clearkey. Enable Streamlink's native encrypted passthrough.
-        session.set_option("stream-passthrough-encrypted", True)
-        # Process clearkeys into format that ffmpeg understands
-        processed_keys = process_keys(dw_opts.clearkey)
-        # Set processed keys as session option
-        session.options.set("clearkeys", processed_keys)
-        log.info(f"DRM Clearkey(s): '{dw_opts.clearkey}' -> {processed_keys}")
-
+    
     """
     Stream detection and plugin loading
     """
@@ -990,13 +915,6 @@ def main():
     elif dw_opts.noaudio and dw_opts.novideo:
         log.warning("Both 'noaudio' and 'novideo' specified. Ignoring both.")
 
-    if dw_opts.clearkey:
-        # If clearkey is provided, regardless of whether or not its a single or double stream
-        # we need to mux because ffmpeg handles the decryption
-        if not isinstance(stream, (MuxedStream, DASHStream)):
-            log.debug("Simple stream detected. Wrapping in SingleMuxedStream to force FFmpeg.")
-            stream = SingleMuxedStream(session, stream)
-
     try:
         log.info("Starting stream...")
         # MPEG-TS packet size
@@ -1030,6 +948,7 @@ def main():
                 sys.stdout.buffer.write(buffer)
                 sys.stdout.buffer.flush()
             except BrokenPipeError:
+                # when flushing buffer ignore broken pipe errors
                 pass
 
     except KeyboardInterrupt:

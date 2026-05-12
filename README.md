@@ -35,6 +35,12 @@ Note: For the new stream profile to appear, you will need to refresh Dispatcharr
 
 Dispatchwrapparr has many more features than those available in the form. The below documentation contains an exhaustive list of the capabilities of the plugin including how to achieve DRM decryption of HLS and DASH streams using clearkey(s).
 
+Loading of the Dispatchwrapparr plugin creates two directories inside your /config directory, and installs the following files:
+
+- `/config/dispatchwrapparr/dispatchwrapparr.py`
+- `/config/dispatchwrapparr/drmplugins/dashdrm.py`
+- `/config/dispatchwrapparr/drmplugins/hlsdrm.py`
+
 ---
 
 ## 🛞 URL Fragment Options
@@ -128,7 +134,6 @@ For example, to select the '720p+a128k_48k' stream variant, then it would look l
 | -novideo                | Optional |                                                           | Disables variant checking (-novariantcheck) and manually specifies that the stream contains no video. This instructs Dispatchwrapparr to mux in blank video.                                 |
 | -nosonginfo             | Optional |                                                           | Disables the display of song information for radio streams. Only a blank video will be muxed                                                                                                 |
 | -loglevel               | Optional | `CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`, `NOTSET` | Sets the python and ffmpeg log levels. By default, the loglevel is set to 'INFO'                                                                                                             |
-| -subtitles              | Optional |                                                           | Enable muxing of subtitles. Disabled by default. NOTE: Subtitle support in streamlink is limited at best - this may not work as intended                                                     |
 
 Example: `dispatchwrapparr.py -i {streamUrl} -ua {userAgent} -proxy http://your.proxy.server:3128 -proxybypass 192.168.0.55,.somesite.com -clearkeys clearkeys.json -loglevel INFO`
 
@@ -163,6 +168,13 @@ For streams where the video and audio use different clearkeys, place them in a c
 
 ---
 
+## 😊 Streamlink Plugins
+
+You do not need to use Dispatchwrapparr in order to use the DASH and HLS DRM plugins. If you wish, you can use the `dashdrm.py` and `hlsdrm.py` plugins on their own with Streamlink.
+
+For the DASH DRM plugin, ensure that you check the [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) Github repository for the latest version.
+For the HLS DRM plugin, the local version in this repository will be the latest version.
+
 ## ‼️ Troubleshooting
 
 ### Jellyfin IPTV streaming issues
@@ -193,12 +205,12 @@ Yes, maybe. Dispatchwrapparr will look for plugins that are placed into the same
 
 This script was made possible thanks to many wonderful python libraries and open source projects.
 
+- [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) for their awesome streamlink dashdrm plugin!
 - [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) development community for making such an awesome stream manager!
 - [SergeantPanda](https://github.com/SergeantPanda) for support and guidance on the Dispatcharr discord
 - [OkinawaBoss](https://github.com/OkinawaBoss) for creating the Dispatcharr plugin system and providing example code
 - [sethwv](https://github.com/sethwv) for building such an awesome plugin system in Dispatcharr
 - [Streamlink](https://streamlink.github.io/) for their awesome API and stream handling capability
-- [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) who laid a lot of the groundwork for managing DASHDRM streams in streamlink!
 - [matthuisman](https://github.com/matthuisman) this guy is a local streaming legend in New Zealand. His code and work with streams has taught me heaps!
 
 ## ⚖️ License
