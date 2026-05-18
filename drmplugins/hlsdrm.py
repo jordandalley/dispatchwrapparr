@@ -6,7 +6,7 @@ import base64
 
 from streamlink.exceptions import FatalPluginError
 from streamlink.plugin import Plugin, pluginmatcher, pluginargument
-from streamlink.plugin.plugin import HIGH_PRIORITY, parse_params
+from streamlink.plugin.plugin import LOW_PRIORITY, parse_params
 from streamlink.stream.hls import HLSStream
 from streamlink.stream.ffmpegmux import FFMPEGMuxer, MuxedStream
 from streamlink.stream.stream import Stream
@@ -19,8 +19,15 @@ HLSDRM_OPTIONS = [
 ]
 
 @pluginmatcher(
-    priority=HIGH_PRIORITY,
-    pattern=re.compile(r"hlsdrm://(?P<url>\S+)(?:\s(?P<params>.+))?$"),
+    re.compile(r"hlsdrm(?:variant)?://(?P<url>\S+)(?:\s(?P<params>.+))?$"),
+)
+@pluginmatcher(
+    priority=LOW_PRIORITY,
+    pattern=re.compile(
+        # URL with explicit scheme, or URL with implicit HTTPS scheme and a path
+        r"(?P<url>[^/]+/\S+\.m3u8(?:\?\S*)?)(?:\s(?P<params>.+))?$",
+        re.IGNORECASE,
+    ),
 )
 @pluginargument(
     "decryption-key",
@@ -60,15 +67,23 @@ class HLSDRM(Plugin):
         return wrapped_streams
 
     def _process_keys(self):
+        '''
+        Function for processing clearkeys
+        Based on work by Titus-AU: https://github.com/titus-au (Thank you!!)
+        '''
+        
         keys = self.get_option('decryption-key')
+        # if a colon separated key is given, assume its kid:key and take the
+        # last component after the colon
         return_keys = []
         for k in keys:
             key = k.split(':')
             key_len = len(key[-1])
             log.debug('Decryption Key %s has %s digits', key[-1], key_len)
-            
             if key_len in (21, 22, 23, 24):
-                log.debug("Key looks like base64, attempting decode...")
+                # key len of 21-24 may mean a base64 key was provided, so we 
+                # try and decode it
+                log.debug("Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
                 b64_string = key[-1]
                 padding = 4 - (len(b64_string) % 4)
                 b64_string = b64_string + ("=" * padding)
@@ -76,59 +91,72 @@ class HLSDRM(Plugin):
                 if b64_key:
                     key = [b64_key]
                     key_len = len(b64_key)
-                    
+                    log.debug('Decryption Key (post base64 decode) is %s and has %s digits', key[-1], key_len)
             if key_len == 32:
+                # sanity check that it's a valid hex string
                 try:
                     int(key[-1], 16)
-                except ValueError:
-                    raise FatalPluginError("Expecting 128bit key in 32 hex digits, but invalid hex found.")
+                except ValueError as err:
+                    raise FatalPluginError(f"Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
             elif key_len != 32:
-                raise FatalPluginError("Expecting 128bit key in 32 hex digits.")
-                
+                raise FatalPluginError(f"Expecting 128bit key in 32 hex digits.")
             return_keys.append(key[-1])
         return return_keys
 
-
 class FFMPEGMuxerDRM(FFMPEGMuxer):
-    """
-    Custom FFmpeg Muxer that injects the decryption keys directly into the command arguments
-    """
+    '''
+    Muxer class for injecting clearkeys for decryption
+    Based on work by Titus-AU: https://github.com/titus-au (Thank you!!)
+    '''
+
     @classmethod
     def _get_keys(cls, session):
-        keys = []
+        keys=[]
         if session.options.get("decryption-key"):
             keys = session.options.get("decryption-key")
+            # If only 1 key is given, then we use that also for all remaining
+            # streams
             if len(keys) == 1:
                 keys.extend(keys)
+        log.debug('Decryption Keys %s', keys)
         return keys
 
     def __init__(self, session, *streams, **options):
+        if not session.options.get("ffmpeg-fout"):
+            session.set_option("ffmpeg-fout", "mpegts")
         super().__init__(session, *streams, **options)
-        
+        # if a decryption key is set, we rebuild the ffmpeg command list
+        # to include the key before specifying the input stream
         keys = self._get_keys(session)
-        key_idx = 0
-
+        log.debug("Keys = %s", keys)
+        key = 0
+        # Build new ffmpeg command list
         old_cmd = self._cmd.copy()
         self._cmd = []
-        
         while len(old_cmd) > 0:
             cmd = old_cmd.pop(0)
             if keys and cmd == "-i":
                 _ = old_cmd.pop(0)
-                self._cmd.extend(["-decryption_key", keys[key_idx]])
-                key_idx += 1
-                if key_idx == len(keys):
-                    key_idx = 1
-                self._cmd.extend([cmd, _])
                 self._cmd.extend(['-thread_queue_size', '4096'])
+                self._cmd.extend(['-fflags', '+genpts+discardcorrupt'])
+                # 30 second timeout if no data receiving from pipes
+                self._cmd.extend(['-rw_timeout', '30000000'])
+                self._cmd.extend(["-decryption_key", keys[key]])
+                key += 1
+                # If we had more streams than keys, start with the first
+                # audio key again
+                if key == len(keys):
+                    key = 1
+                self._cmd.extend([cmd, _])
             else:
                 self._cmd.append(cmd)
-                
-        log.debug("Updated HLS FFmpeg command: %s", self._cmd)
-
+        #self._cmd.extend(["-report"])
+        log.debug("Updated ffmpeg command %s", self._cmd)
 
 class SingleStreamDRM(Stream):
-    """Wrapper to force a single-track HLS stream through our DRM FFmpeg muxer"""
+    """
+    Wrapper for forcing the DRM FFmpeg muxer for single-track hls streams
+    """
     def __init__(self, session, stream):
         super().__init__(session)
         self.stream = stream
@@ -145,7 +173,9 @@ class SingleStreamDRM(Stream):
 
 
 class MuxedStreamDRM(Stream):
-    """Wrapper to safely unpack a multi-track HLS stream into our DRM FFmpeg muxer"""
+    """
+    Wrapper for invoking the DRM FFmpeg muxer for multi-track hls streams
+    """
     def __init__(self, session, muxed_stream):
         super().__init__(session)
         self.substreams = muxed_stream.substreams

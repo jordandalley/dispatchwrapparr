@@ -35,11 +35,13 @@ Note: For the new stream profile to appear, you will need to refresh Dispatcharr
 
 Dispatchwrapparr has many more features than those available in the form. The below documentation contains an exhaustive list of the capabilities of the plugin including how to achieve DRM decryption of HLS and DASH streams using clearkey(s).
 
-Loading of the Dispatchwrapparr plugin creates two directories inside your /config directory, and installs the following files:
+Loading of the Dispatchwrapparr plugin creates two directories inside your /config directory, and installs the following files automatically:
 
 - `/config/dispatchwrapparr/dispatchwrapparr.py`
 - `/config/dispatchwrapparr/drmplugins/dashdrm.py`
 - `/config/dispatchwrapparr/drmplugins/hlsdrm.py`
+
+Updates to Dispatchwrapparr, including the files above are handled via the official Dispatcharr plugin system.
 
 ---
 
@@ -101,9 +103,7 @@ Once this command is running, play the stream and look at the output of the abov
 
 Some examples of outputs are shown below:
 
-`2025-10-14 19:44:01,863 INFO ts_proxy.stream_manager FFmpeg info for channel 86952480-4c6b-4df1-a60b-306e28a43cb3: [dispatchwrapparr] 2025-10-14 19:44:01,860 [info] Available streams: 270p_alt, 270p, 360p_alt, 360p, 480p_alt, 480p, 720p_alt2, 720p_alt, 720p, 1080p_alt, 1080p, worst, best`
-
-`2025-10-14 19:58:25,926 INFO ts_proxy.stream_manager FFmpeg info for channel bda87427-1a81-43d0-8e3d-84b2cf3484b4: [dispatchwrapparr] 2025-10-14 19:58:25,926 [info] Available streams: 720p+a128k_48k, 720p+a128k_44k_alt, 720p+a128k_48k_alt2, 720p+a128k_44k_alt3, 540p+a128k_48k, 540p+a128k_44k_alt, 360p+a128k_48k, 360p+a128k_44k_alt, 270p+a128k_48k, 270p+a128k_44k_alt, best, worst`
+`[dispatchwrapparr] 2025-10-14 19:44:01,860 [info] Available streams: 270p_alt, 270p, 360p_alt, 360p, 480p_alt, 480p, 720p_alt2, 720p_alt, 720p, 1080p_alt, 1080p, worst, best`
 
 Once you have the stream you wish to use, eg. '1080p_alt', then all you need to do is append the fragment to the end of the stream URL as follows: `https://some.stream.com/playlist.m3u8#stream=1080p_alt`
 
@@ -172,8 +172,7 @@ For streams where the video and audio use different clearkeys, place them in a c
 
 You do not need to use Dispatchwrapparr in order to use the DASH and HLS DRM plugins. If you wish, you can use the `dashdrm.py` and `hlsdrm.py` plugins on their own with Streamlink.
 
-For the DASH DRM plugin, ensure that you check the [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) Github repository for the latest version.
-For the HLS DRM plugin, the local version in this repository will be the latest version.
+Credit: A huge thanks to [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) whose dashdrm plugin 
 
 ## ‼️ Troubleshooting
 
@@ -185,7 +184,7 @@ Make sure that all options ("Allow fMP4 transcoding container", "Allow stream sh
 
 ### My stream only plays audio or won't start
 
-Sometimes broadcasters don't include timestamps in the audio stream. Since version 1.6.2, Dispatchwrapparr copies timestamps by default when muxing. There may be occasions where you may need to disable this feature.
+Sometimes broadcasters don't include timestamps in the audio stream. Since version 1.6.2, Dispatchwrapparr tells ffmpeg to copy timestamps by default when muxing. There may be occasions where you may need to disable this feature.
 
 See the `-ffmpeg_nocopyts` option or `#ffmpeg_nocopyts=true` url fragment options for more details.
 
@@ -197,7 +196,7 @@ While dispatchwrapparr has had some success in dealing with these types of strea
 
 ### Can I use a custom Streamlink plugin?
 
-Yes, maybe. Dispatchwrapparr will look for plugins that are placed into the same directory as itself and load them. However, some plugins require Chromium based browsers for session tokens, and/or require additional arguments which Dispatchwrapparr will not pass through.
+Yes, maybe. Pass the `-streamlink_plugins` option to Dispatchwrapparr, specifying a custom directory to look for plugins in. In some circumstances, plugins may require Chromium based browsers for session tokens, and/or require additional arguments which Dispatchwrapparr will not pass through. The best option here is to just use Streamlink directly.
 
 ---
 

@@ -521,15 +521,10 @@ def detect_streams(session, url, clearkey):
         # Begin plugin options
         plugin_options = Options()
         # Set decryption keys for HLS/DASH DRM plugins
-        if clearkey:
-            plugin_options.set("decryption-key", [clearkey])
+        plugin_options.set("decryption-key", [clearkey])
         # Set plugin matcher URL's for matching
         if type == "dash":
             url = f"dashdrm://{url}"
-            #plugin_options.set("presentation-delay", 10)
-            plugin_options.set("video-timescale", 50000)
-            #plugin_options.set("always-play-last-period", True)
-            plugin_options.set("availability-grace", 10)
         elif type == "hls":
             url = f"hlsdrm://{url}"
         # Match plugin through new URL
@@ -577,10 +572,6 @@ def detect_streams(session, url, clearkey):
         if plugin_name == "dash" and clearkey:
             streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
             return streams
-        elif plugin_name == "dash":
-            # use titus-au dashdrm plugin for normal dash streams
-            streams = invoke_drm_plugin(session, url, plugin_name, None)
-            return streams
         elif plugin_name == "hls" and clearkey:
             streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
             return streams
@@ -604,9 +595,8 @@ def detect_streams(session, url, clearkey):
         
         elif stream_type == "dash":
             log.debug("DASH Stream Detected via MIME Type Resolver")
-            # use titus-au dashdrm plugin for normal dash streams
-            streams = invoke_drm_plugin(session, url, stream_type, None)
-            return streams
+            plugin = MPEGDASH(session, url)
+            return plugin.streams()
             
         elif stream_type == "hls":
             log.debug("HLS Stream Detected via MIME Type Resolver")
@@ -791,11 +781,13 @@ def main():
     log.debug(f"Headers: {headers}")
 
     # Set generic session options for Streamlink
-    session.set_option("stream-segment-threads", 2)
+    session.set_option("stream-segment-threads", 1)
     # Start HLS stream further in from the live edge
     session.set_option("hls-live-edge", 6)
     # Enable segment streaming to smooth inputs for HLS streams
     session.set_option("hls-segment-stream-data", True)
+    # Increase http timeouts from 20 to 30 seconds
+    session.set_option("http-timeout", 30)
     # If cli -proxy argument supplied
     if dw_opts.proxy:
         # Set proxies as env vars for streamlink/requests/ffmpeg et al
