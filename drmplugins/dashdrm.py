@@ -4,21 +4,44 @@ import re
 import base64
 import logging
 import itertools
+import datetime
 
 from streamlink.exceptions import FatalPluginError, StreamError
 from streamlink.plugin import Plugin, pluginmatcher, pluginargument
 from streamlink.plugin.plugin import HIGH_PRIORITY, parse_params, stream_weight
-from streamlink.stream.dash import DASHStream, DASHStreamWorker, DASHStreamReader, DASHStreamWriter
+from streamlink.stream.dash import DASHStream, DASHStreamWorker, DASHStreamReader
 from streamlink.stream.dash.manifest import MPD, freeze_timeline
 from streamlink.stream.ffmpegmux import FFMPEGMuxer
 from streamlink.stream.stream import Stream
 from streamlink.utils.url import update_scheme
 from streamlink.utils.times import now
+from requests.adapters import HTTPAdapter
 
 log = logging.getLogger(__name__)
 
+'''
+DASHDRM plugin for Dispatchwrapparr & Streamlink
+Requires: Streamlink >= 8.4.0
+
+This plugin mostly inherits and extends the existing Streamlink DASH classes for additional support of DRM decryption of streams using supplied clearkey(s).
+It can also be used for normal DASH streams and supports shifting of periods due to various ad injection techniques.
+
+- Sets the Streamlink session option "stream-passthrough-encrypted" to "True" if a clearkey(s) are passed using the decyption-key plugin option
+- Custom FFMPEGMuxerDRM class which creates a custom FFmpeg muxer injects the clearkeys, and also adds muxing flags to generate presentation timestamps (-fflags +genpts)
+- Support for playing streams with ad injection or SCTE-35 implementations where MPD periods move and shift. This plugin will following the live period by attempting
+  to play the period where there is no duration, and if that changes, finding a new period with no duration. By default it will start with the last period unless a different period is specified.
+- A similar feature to the 'hls-segment-stream-data' option in Streamlink has been implemented which allows segment data to be written as it is being downloaded and prevent
+  requests from blocking (dash-segment-stream-data).
+- The 'ignore-mup' option ignores the minimumUpdatePeriod in the manifest and clamps the refresh time to 5 seconds. This is useful where certain broadcasters add new segments at each update
+  period that do not align with the minimumUpdatePeriod, causing gaps in playback.
+
+Thanks to Titus-AU, whose code is used as a reference and who laid a lot of a groundwork for DRM handling in Streamlink: https://github.com/titus-au
+'''
+
 DASHDRM_OPTIONS = [
-    "decryption-key"
+    "decryption-key",
+    "dash-segment-stream-data",
+    "ignore-mup"
 ]
 @pluginmatcher(
     priority=HIGH_PRIORITY,
@@ -28,6 +51,16 @@ DASHDRM_OPTIONS = [
     "decryption-key",
     type="comma_list",
     help="Decryption key(s) to be passed to ffmpeg."
+)
+@pluginargument(
+    "ignore-mup",
+    action="store_true",
+    help="Ignore the manifest minimumUpdatePeriod to check for new segments more frequently"
+)
+@pluginargument(
+    "dash-segment-stream-data",
+    action="store_true",
+    help="Same as 'hls-segment-stream-data' option in Streamlink, but for DASH"
 )
 
 class MPEGDASHDRM(Plugin):
@@ -48,11 +81,8 @@ class MPEGDASHDRM(Plugin):
         url = update_scheme("https://", data.get("url"), force=False)
         params = parse_params(data.get("params"))
         if not params.get("period"):
-            # If no params specified, always start DASH streams from the last available period
+            log.debug("MPEGDASHDRM: No period parameter specified. Defaulting to last available period.")
             params['period'] = -1
-
-        log.debug(f"URL={url}; params={params}")
-
         # process and store plugin options before passing streams back
         for option in DASHDRM_OPTIONS:
             if option == 'decryption-key':
@@ -60,16 +90,34 @@ class MPEGDASHDRM(Plugin):
                     self.session.options[option] = self._process_keys()
                     # Force Streamlink to accept encrypted streams
                     self.session.set_option("stream-passthrough-encrypted", True)
+                if self.get_option('dash-segment-stream-data'):
+                    # Increase connection pool size if streaming)
+                    adapter = HTTPAdapter(pool_connections=25, pool_maxsize=25)
+                    self.session.http.mount('https://', adapter)
+                    self.session.http.mount('http://', adapter)
             else:
                 self.session.options[option] = self.get_option(option)
 
         streams = DASHStream.parse_manifest(self.session, url, **params)
         
-        # Wrap streams in our Custom Reader architecture
-        wrapped_streams = {name: DASHStreamDRM(self.session, stream) for name, stream in streams.items()}
+        wrapped_streams = {}
+        for name, stream in streams.items():
+            # Apply the MUP override if the option is enabled
+            if self.session.options.get("ignore-mup"):
+                if getattr(stream.mpd, 'minimumUpdatePeriod', None):
+                    if stream.mpd.minimumUpdatePeriod.total_seconds() > 5.0:
+                        stream.mpd.minimumUpdatePeriod = datetime.timedelta(seconds=5.0)
+                        log.debug("MPEGDASHDRM: Clamping manifest update periods to 5.0s due to 'ignore-mup' option.")
+                        
+            wrapped_streams[name] = DASHStreamDRM(self.session, stream)
+            
         return wrapped_streams
 
     def _process_keys(self):
+        '''
+        Function for processing clearkeys
+        Based on work by Titus-AU: https://github.com/titus-au (Thank you!!)
+        '''
         keys = self.get_option('decryption-key')
         # if a colon separated key is given, assume its kid:key and take the
         # last component after the colon
@@ -77,11 +125,11 @@ class MPEGDASHDRM(Plugin):
         for k in keys:
             key = k.split(':')
             key_len = len(key[-1])
-            log.debug('Decryption Key %s has %s digits', key[-1], key_len)
+            log.debug("MPEGDASHDRM: Decryption Key %s has %s digits", key[-1], key_len)
             if key_len in (21, 22, 23, 24):
                 # key len of 21-24 may mean a base64 key was provided, so we 
                 # try and decode it
-                log.debug("Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
+                log.debug("MPEGDASHDRM: Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
                 b64_string = key[-1]
                 padding = 4 - (len(b64_string) % 4)
                 b64_string = b64_string + ("=" * padding)
@@ -89,15 +137,15 @@ class MPEGDASHDRM(Plugin):
                 if b64_key:
                     key = [b64_key]
                     key_len = len(b64_key)
-                    log.debug('Decryption Key (post base64 decode) is %s and has %s digits', key[-1], key_len)
+                    log.debug("MPEGDASHDRM: Decryption Key (post base64 decode) is %s and has %s digits", key[-1], key_len)
             if key_len == 32:
                 # sanity check that it's a valid hex string
                 try:
                     int(key[-1], 16)
                 except ValueError as err:
-                    raise FatalPluginError(f"Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
+                    raise FatalPluginError(f"MPEGDASHDRM: Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
             elif key_len != 32:
-                raise FatalPluginError(f"Expecting 128bit key in 32 hex digits.")
+                raise FatalPluginError(f"MPEGDASHDRM: Expecting 128bit key in 32 hex digits.")
             return_keys.append(key[-1])
         return return_keys
 
@@ -112,88 +160,48 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
         keys=[]
         if session.options.get("decryption-key"):
             keys = session.options.get("decryption-key")
-            # If only 1 key is given, then we use that also for all remaining
-            # streams
+            # If only 1 key is given, then we use that also for all remaining streams
             if len(keys) == 1:
                 keys.extend(keys)
-        log.debug('Decryption Keys %s', keys)
+            log.debug("FFMPEGMuxerDRM: Decryption Keys %s", keys)
         return keys
 
     def __init__(self, session, *streams, **options):
         super().__init__(session, *streams, **options)
         # if a decryption key is set, we rebuild the ffmpeg command list
-        # to include the key before specifying the input stream
+        # to include the key before specifying the input streams
+        # after that we append our inputs
         keys = self._get_keys(session)
         key = 0
-        vid_codec_preset = None
-        # Build new ffmpeg command list
+        # begin building a new ffmpeg command list
         old_cmd = self._cmd.copy()
         self._cmd = []
         while len(old_cmd) > 0:
             cmd = old_cmd.pop(0)
-            if keys and cmd == "-i":
+            if cmd == "-i":
                 _ = old_cmd.pop(0)
-                self._cmd.extend(['-thread_queue_size', '4096'])
-                self._cmd.extend(['-fflags', '+genpts+discardcorrupt'])
-                # 30 second timeout if no data receiving from pipes
-                self._cmd.extend(['-rw_timeout', '30000000'])
-                self._cmd.extend(["-decryption_key", keys[key]])
-                key += 1
-                # If we had more streams than keys, start with the first
-                # audio key again
-                if key == len(keys):
-                    key = 1
+                # increase thread queue
+                self._cmd.extend(['-thread_queue_size', '5120'])
+                # generate presentation timestamps from dts
+                self._cmd.extend(['-fflags', '+genpts'])
+                if keys:
+                    self._cmd.extend(["-decryption_key", keys[key]])
+                    key += 1
+                    # If we had more streams than keys, start with the first audio key again
+                    if key == len(keys):
+                        key = 1
                 self._cmd.extend([cmd, _])
             else:
                 self._cmd.append(cmd)
-        log.debug("Updated ffmpeg command %s", self._cmd)
+        # pop the last argument (the output pipe, e.g., "pipe:1")
+        output_pipe = self._cmd.pop()
+        # ffmpeg output options here if needed
+        # append the output pipe back to the very end
+        self._cmd.append(output_pipe)
+        log.debug("FFMPEGMuxerDRM: Updated ffmpeg command %s", self._cmd)
 
 class DASHStreamWorkerDRM(DASHStreamWorker):
     reader: DASHStreamReaderDRM
-
-    def iter_segments(self):
-        init = True
-        back_off_factor = 1
-        while not self.closed:
-            # find the representation by ID
-            representation = self.mpd.get_representation(self.reader.ident)
-
-            if self.mpd.type == "static":
-                refresh_wait = 5
-            else:
-                refresh_wait = (
-                    max(
-                        self.mpd.minimumUpdatePeriod.total_seconds(),
-                        representation.period.duration.total_seconds() if representation else 0,
-                    )
-                    or 5
-                )
-
-            with self.sleeper(refresh_wait * back_off_factor):
-                if not representation:
-                    continue
-
-                iter_segments = representation.segments(
-                    sequence=self.sequence,
-                    init=init,
-                    # sync initial timeline generation between audio and video threads
-                    timestamp=self.reader.timestamp if init else None,
-                )
-                for segment in iter_segments:
-                    if init and not segment.init:
-                        self.sequence = segment.num
-                        init = False
-                    yield segment
-
-                # close worker if type is not dynamic (all segments were put into writer queue)
-                if self.mpd.type != "dynamic":
-                    self.close()
-                    return
-
-                if not self.reload():
-                    back_off_factor = max(back_off_factor * 1.3, 10.0)
-                else:
-                    back_off_factor = 1
 
     def reload(self):
         """
@@ -206,12 +214,14 @@ class DASHStreamWorkerDRM(DASHStreamWorker):
             return
 
         self.reader.buffer.wait_free()
-        log.debug(f"Reloading DASH manifest {self.reader.ident!r}")
+        log.debug(f"DASHStreamWorkerDRM: Reloading DASH manifest {self.reader.ident!r}")
+
         res = self.session.http.get(
             self.mpd.url,
             exception=StreamError,
             retries=self.manifest_reload_retries,
-            **self.stream.args,
+            # ensure that stream=False for manifest fetches in case `dash-segment-stream-data` option is specified
+            **{**self.stream.args, "stream": False}
         )
 
         new_mpd = MPD(
@@ -221,24 +231,30 @@ class DASHStreamWorkerDRM(DASHStreamWorker):
             timelines=self.mpd.timelines,
         )
 
+        # Apply the MUP override on reloaded manifests if the option is enabled
+        if self.session.options.get("ignore-mup"):
+            if getattr(new_mpd, 'minimumUpdatePeriod', None):
+                if new_mpd.minimumUpdatePeriod.total_seconds() > 5.0:
+                    new_mpd.minimumUpdatePeriod = datetime.timedelta(seconds=5.0)
+
         # get the current amount of periods before reload
         self.new_num_periods = len(new_mpd.periods)
 
         # check if period count has changed
         if self.old_num_periods != self.new_num_periods:
-            log.debug(f"DASH Stream for Representation {self.reader.ident[2]} has changed from {self.old_num_periods} to {self.new_num_periods} periods")
+            log.debug(f"DASHStreamWorkerDRM: DASH Stream for Representation {self.reader.ident[2]} has changed from {self.old_num_periods} to {self.new_num_periods} periods")
             self.new_periods = [f"{idx}{f' (id={p.id!r})' if p.id is not None else ''}" for idx, p in enumerate(new_mpd.periods)]
-            log.debug(f"Old DASH periods for Representation {self.reader.ident[2]}: {', '.join(self.old_periods)}")
-            log.debug(f"New DASH periods for Representation {self.reader.ident[2]}: {', '.join(self.new_periods)}")
+            log.debug(f"DASHStreamWorkerDRM: Old DASH periods for Representation {self.reader.ident[2]}: {', '.join(self.old_periods)}")
+            log.debug(f"DASHStreamWorkerDRM: New DASH periods for Representation {self.reader.ident[2]}: {', '.join(self.new_periods)}")
             new_period_idx = next(
                 (idx for idx, p in enumerate(new_mpd.periods) if getattr(p, 'duration', None) in (None, 0)),
-                len(new_mpd.periods) - 1  # fallback: last period
+                len(new_mpd.periods) - 1  # fallback to last period
             )
-            log.debug(f"Auto-selected new DASH period {new_period_idx} for Representation {self.reader.ident[2]}")
+            log.debug(f"DASHStreamWorkerDRM: Auto-selected new DASH period {new_period_idx} for Representation {self.reader.ident[2]}")
             # get new period id by index
             new_period_id = new_mpd.periods[new_period_idx].id
             # reader.ident is an immutable tuple (period_id, timeline_id, rep_id).
-            # Replace it by constructing a new tuple preserving the remaining parts.
+            # we need to replace it by constructing a new tuple while preserving the remaining parts
             try:
                 old_ident = getattr(self.reader, "ident", None)
                 if isinstance(old_ident, tuple):
@@ -247,9 +263,9 @@ class DASHStreamWorkerDRM(DASHStreamWorker):
                 else:
                      # fallback: set a simple tuple with the new period id
                     self.reader.ident = (new_period_id,)
-                log.debug("DASH Stream: updated reader.ident -> %r", getattr(self.reader, "ident", None))
+                log.debug("DASHStreamWorkerDRM: Updated reader.ident -> %r", getattr(self.reader, "ident", None))
             except Exception:
-                log.exception("DASH Stream: failed to update reader.ident after period change")
+                log.exception("DASHStreamWorkerDRM: Failed to update reader.ident after period change!")
 
         """
         Probe the new MPD to see if that representation has available segments (without iterating the whole timeline);
@@ -264,7 +280,6 @@ class DASHStreamWorkerDRM(DASHStreamWorker):
 
         return changed
 
-
     def change_period(self):
         # get the current amount of periods before reload
         self.old_num_periods = len(self.mpd.periods)
@@ -275,18 +290,24 @@ class DASHStreamWorkerDRM(DASHStreamWorker):
             (idx for idx, p in enumerate(self.mpd.periods) if p.id == current_period),
             -1  # fallback: last period
         )
-        log.debug(f"Current DASH stream period index for Representation {self.reader.ident[2]}: {current_period_index}")
-
+        log.debug(f"DASHStreamWorkerDRM: Current DASH stream period index for Representation {self.reader.ident[2]}: {current_period_index}")
+    
 class DASHStreamReaderDRM(DASHStreamReader):
-    __worker__ = DASHStreamWorkerDRM
-
-class DASHStreamWriterDRM(DASHStreamWriter):
     __worker__ = DASHStreamWorkerDRM
 
 class DASHStreamDRM(Stream):
     def __init__(self, session, dash_stream):
         super().__init__(session)
         self.dash_stream = dash_stream
+
+        if session.options.get("dash-segment-stream-data"):
+            # This section enables functionality that's the equivalent to the 'hls-segment-stream-data' option native to Streamlink
+            # Doing this prevents the requests library from blocking when downloading segments, however we don't want streaming to apply to manifest downloads.
+            # Since we already override the DASHStreamWorker.reload() class.function with our own for period change detection, it's simpler to just enable Stream=True globally
+            # so it covers segment downloads, but within our own DASHStreamWorkerDRM.reload() function we change stream=False so it doesn't apply here.
+            if not hasattr(self.dash_stream, "args"):
+                self.dash_stream.args = {}
+            self.dash_stream.args["stream"] = True
 
     def open(self):
         video, audio = None, None

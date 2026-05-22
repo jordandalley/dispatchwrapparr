@@ -10,7 +10,6 @@ import sys
 import re
 import signal
 import logging
-import base64
 import argparse
 import requests
 import fnmatch
@@ -29,7 +28,6 @@ from streamlink.stream.ffmpegmux import MuxedStream
 from streamlink.stream.hls import HLSStream
 from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
-from streamlink.plugins.dash import MPEGDASH
 from streamlink.options import Options
 
 __version__ = "1.7.0"
@@ -520,10 +518,13 @@ def detect_streams(session, url, clearkey):
         log.debug(f"Loaded DRM Streamlink plugins from: {plugins_dir}")
         # Begin plugin options
         plugin_options = Options()
-        # Set decryption keys for HLS/DASH DRM plugins
-        plugin_options.set("decryption-key", [clearkey])
+        if clearkey:
+            # Set decryption keys for HLS/DASH DRM plugins
+            plugin_options.set("decryption-key", [clearkey])
         # Set plugin matcher URL's for matching
         if type == "dash":
+            # By default, we'll ignore minimumUpdatePeriod
+            plugin_options.set("ignore-mup", True)
             url = f"dashdrm://{url}"
         elif type == "hls":
             url = f"hlsdrm://{url}"
@@ -575,6 +576,10 @@ def detect_streams(session, url, clearkey):
         elif plugin_name == "hls" and clearkey:
             streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
             return streams
+        elif plugin_name == "dash":
+            # Use our own DASH handler for dash period change and pacing support
+            streams = invoke_drm_plugin(session, url, plugin_name, None)
+            return streams
         else:
             log.debug(f"Plugin '{plugin_name}' matched via resolver")
             return plugin.streams()
@@ -595,8 +600,9 @@ def detect_streams(session, url, clearkey):
         
         elif stream_type == "dash":
             log.debug("DASH Stream Detected via MIME Type Resolver")
-            plugin = MPEGDASH(session, url)
-            return plugin.streams()
+            # Use our own DASH handler for dash period change and pacing support
+            streams = invoke_drm_plugin(session, url, stream_type, None)
+            return streams
             
         elif stream_type == "hls":
             log.debug("HLS Stream Detected via MIME Type Resolver")
@@ -781,13 +787,11 @@ def main():
     log.debug(f"Headers: {headers}")
 
     # Set generic session options for Streamlink
-    session.set_option("stream-segment-threads", 1)
+    session.set_option("stream-segment-threads", 2)
     # Start HLS stream further in from the live edge
     session.set_option("hls-live-edge", 6)
-    # Enable segment streaming to smooth inputs for HLS streams
-    session.set_option("hls-segment-stream-data", True)
-    # Increase http timeouts from 20 to 30 seconds
-    session.set_option("http-timeout", 30)
+    # Increase the size of the Streamlink Ringbuffer to 64MiB
+    session.set_option("ringbuffer-size", 67108864)
     # If cli -proxy argument supplied
     if dw_opts.proxy:
         # Set proxies as env vars for streamlink/requests/ffmpeg et al
@@ -832,7 +836,8 @@ def main():
     session.set_option("ffmpeg-loglevel", dw_opts.ffmpeg_loglevel) # Set ffmpeg loglevel
     session.set_option("ffmpeg-verbose", True) # Pass ffmpeg stderr through to streamlink
     session.set_option("ffmpeg-fout", "mpegts") # Encode as mpegts when ffmpeg muxing (not matroska like default)
-    
+    session.set_option("ffmpeg-no-validation", True) # Don't bother wasting time checking for FFmpeg. We know it's baked into Dispatcharr :)
+
     """
     Stream detection and plugin loading
     """
@@ -911,10 +916,10 @@ def main():
         log.info("Starting stream...")
         # MPEG-TS packet size
         PACKET_SIZE = 188
-        # Match Dispatcharr's read buffer size (12 KB)
-        READ_CHUNK = PACKET_SIZE * 64
-        # Write buffer size set to 192 KB to prevent flushing on every 12KB chunk
-        WRITE_BUFFER_SIZE = PACKET_SIZE * 1024
+        # OS pipe alignment for reading chunks from streamlink/ffmpeg
+        READ_CHUNK = PACKET_SIZE * 340
+        # Write buffer size set to match dispatcharr's read buffer (1MB)
+        WRITE_BUFFER_SIZE = PACKET_SIZE * 5644
 
         # Create a buffer
         buffer = bytearray()

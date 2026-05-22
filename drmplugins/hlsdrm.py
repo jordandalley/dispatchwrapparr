@@ -14,6 +14,23 @@ from streamlink.utils.url import update_scheme
 
 log = logging.getLogger(__name__)
 
+'''
+HLSDRM plugin for Dispatchwrapparr & Streamlink
+Requires: Streamlink >= 8.4.0
+
+Trying to keep this implementation as lite-touch as possible and just let Streamlink do what it does best and handle
+the playlist parsing and segment downloads.
+
+All I'm doing here ensuring that the session option "stream-passthrough-encrypted" is set to "True" if a clearkey or clearkeys are passed
+so that we can then get ffmpeg to do the decryption of the livestream.
+
+In case of an HLS stream where normally muxing is not required, we force muxing using our own class so that we can again get ffmpeg to
+decrypt the stream with supplied clearkey(s).
+
+Thanks to Titus-AU, whose code is used as a reference and who laid a lot of a groundwork for DRM handling in Streamlink: https://github.com/titus-au
+'''
+
+
 HLSDRM_OPTIONS = [
     "decryption-key",
 ]
@@ -21,6 +38,7 @@ HLSDRM_OPTIONS = [
 @pluginmatcher(
     re.compile(r"hlsdrm(?:variant)?://(?P<url>\S+)(?:\s(?P<params>.+))?$"),
 )
+
 @pluginmatcher(
     priority=LOW_PRIORITY,
     pattern=re.compile(
@@ -29,17 +47,19 @@ HLSDRM_OPTIONS = [
         re.IGNORECASE,
     ),
 )
+
 @pluginargument(
     "decryption-key",
     type="comma_list",
-    help="Decryption key to be passed to ffmpeg."
+    help="Decryption key(s) to be passed to ffmpeg."
 )
+
 class HLSDRM(Plugin):
     def _get_streams(self):
         data = self.match.groupdict()
         url = update_scheme("https://", data.get("url"), force=False)
         params = parse_params(data.get("params"))
-        log.debug(f"URL={url}; params={params}")
+        log.debug(f"HLSDRM: URL={url}; params={params}")
         # Set streamlink to pass through encrypted
         self.session.set_option("stream-passthrough-encrypted", True)
         # Process and store plugin options
@@ -71,7 +91,6 @@ class HLSDRM(Plugin):
         Function for processing clearkeys
         Based on work by Titus-AU: https://github.com/titus-au (Thank you!!)
         '''
-        
         keys = self.get_option('decryption-key')
         # if a colon separated key is given, assume its kid:key and take the
         # last component after the colon
@@ -79,11 +98,11 @@ class HLSDRM(Plugin):
         for k in keys:
             key = k.split(':')
             key_len = len(key[-1])
-            log.debug('Decryption Key %s has %s digits', key[-1], key_len)
+            log.debug("HLSDRM: Decryption Key %s has %s digits", key[-1], key_len)
             if key_len in (21, 22, 23, 24):
                 # key len of 21-24 may mean a base64 key was provided, so we 
                 # try and decode it
-                log.debug("Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
+                log.debug("HLSDRM: Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
                 b64_string = key[-1]
                 padding = 4 - (len(b64_string) % 4)
                 b64_string = b64_string + ("=" * padding)
@@ -91,15 +110,15 @@ class HLSDRM(Plugin):
                 if b64_key:
                     key = [b64_key]
                     key_len = len(b64_key)
-                    log.debug('Decryption Key (post base64 decode) is %s and has %s digits', key[-1], key_len)
+                    log.debug("HLSDRM: Decryption Key (post base64 decode) is %s and has %s digits", key[-1], key_len)
             if key_len == 32:
                 # sanity check that it's a valid hex string
                 try:
                     int(key[-1], 16)
                 except ValueError as err:
-                    raise FatalPluginError(f"Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
+                    raise FatalPluginError(f"HLSDRM: Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
             elif key_len != 32:
-                raise FatalPluginError(f"Expecting 128bit key in 32 hex digits.")
+                raise FatalPluginError(f"HLSDRM: Expecting 128bit key in 32 hex digits.")
             return_keys.append(key[-1])
         return return_keys
 
@@ -114,44 +133,45 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
         keys=[]
         if session.options.get("decryption-key"):
             keys = session.options.get("decryption-key")
-            # If only 1 key is given, then we use that also for all remaining
-            # streams
+            # If only 1 key is given, then we use that also for all remaining streams
             if len(keys) == 1:
                 keys.extend(keys)
-        log.debug('Decryption Keys %s', keys)
+            log.debug("FFMPEGMuxerDRM: Decryption Keys %s", keys)
         return keys
 
     def __init__(self, session, *streams, **options):
-        if not session.options.get("ffmpeg-fout"):
-            session.set_option("ffmpeg-fout", "mpegts")
         super().__init__(session, *streams, **options)
         # if a decryption key is set, we rebuild the ffmpeg command list
-        # to include the key before specifying the input stream
+        # to include the key before specifying the input streams
+        # after that we append our inputs
         keys = self._get_keys(session)
-        log.debug("Keys = %s", keys)
         key = 0
-        # Build new ffmpeg command list
+        # begin building a new ffmpeg command list
         old_cmd = self._cmd.copy()
         self._cmd = []
         while len(old_cmd) > 0:
             cmd = old_cmd.pop(0)
-            if keys and cmd == "-i":
+            if cmd == "-i":
                 _ = old_cmd.pop(0)
-                self._cmd.extend(['-thread_queue_size', '4096'])
-                self._cmd.extend(['-fflags', '+genpts+discardcorrupt'])
-                # 30 second timeout if no data receiving from pipes
-                self._cmd.extend(['-rw_timeout', '30000000'])
-                self._cmd.extend(["-decryption_key", keys[key]])
-                key += 1
-                # If we had more streams than keys, start with the first
-                # audio key again
-                if key == len(keys):
-                    key = 1
+                # increase thread queue
+                self._cmd.extend(['-thread_queue_size', '5120'])
+                # generate presentation timestamps from dts
+                self._cmd.extend(['-fflags', '+genpts'])
+                if keys:
+                    self._cmd.extend(["-decryption_key", keys[key]])
+                    key += 1
+                    # If we had more streams than keys, start with the first audio key again
+                    if key == len(keys):
+                        key = 1
                 self._cmd.extend([cmd, _])
             else:
                 self._cmd.append(cmd)
-        #self._cmd.extend(["-report"])
-        log.debug("Updated ffmpeg command %s", self._cmd)
+        # pop the last argument (the output pipe, e.g., "pipe:1")
+        output_pipe = self._cmd.pop()
+        # put any output ffmpeg options here if ever needed
+        # append the output pipe back to the very end
+        self._cmd.append(output_pipe)
+        log.debug("FFMPEGMuxerDRM: Updated ffmpeg command %s", self._cmd)
 
 class SingleStreamDRM(Stream):
     """
