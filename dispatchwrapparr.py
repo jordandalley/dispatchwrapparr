@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.0"
+__version__ = "1.7.1"
 
 def parse_args():
     # Initial wrapper arguments
