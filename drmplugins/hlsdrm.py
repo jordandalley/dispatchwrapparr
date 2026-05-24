@@ -14,6 +14,8 @@ from streamlink.utils.url import update_scheme
 
 log = logging.getLogger(__name__)
 
+__version__ = "1.7.1"
+
 '''
 HLSDRM plugin for Dispatchwrapparr & Streamlink
 Requires: Streamlink >= 8.4.0

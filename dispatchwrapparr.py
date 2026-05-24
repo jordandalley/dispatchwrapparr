@@ -158,8 +158,14 @@ class PlayRadio:
             cmd.extend(["-cookies", cookie_str])
 
         cmd.extend([
+            "-re", # read at native rate
+            "-readrate_initial_burst", "20", # initial burst of 20 seconds for fast startup
+            "-copyts", "-start_at_zero", # copy timestamps but start them at zero so it syncs with video stream
             "-i", self.url,
             "-f", "lavfi",
+            "-re", # read at native rate
+            "-readrate_initial_burst", "20", # initial burst of 20 seconds for fast startup
+            "-copyts", "-start_at_zero", # copy timestamps but start them at zero so it syncs with audio stream
             "-i", f"color=size={self.resolution}:rate={self.fps}:color=black"
         ])
 
@@ -276,7 +282,7 @@ class PlayRadio:
             Extract metadata from HLS streams (EXTINF) for the first segment.
             """
             result = None
-            with self.session.get(self.url, stream=True) as resp:
+            with self.session.get(self.url, stream=False) as resp:
                 master = m3u8.loads(resp.text)
                 if master.is_variant:
                     # choose highest bandwidth variant
@@ -918,8 +924,14 @@ def main():
         PACKET_SIZE = 188
         # OS pipe alignment for reading chunks from streamlink/ffmpeg
         READ_CHUNK = PACKET_SIZE * 340
-        # Write buffer size set to match dispatcharr's read buffer (1MB)
-        WRITE_BUFFER_SIZE = PACKET_SIZE * 5644
+        if dw_opts.novideo:
+            # Smaller write buffer for radio streams
+            # Helps empty the bucket sooner at lower bandwidth
+            WRITE_BUFFER_SIZE = PACKET_SIZE * 340
+        else:
+            # Larger write buffer for normal video/audio streams
+            # Supposedly this matches dispatcharr's read buffer (1 MB / 1,061,072 bytes)
+            WRITE_BUFFER_SIZE = PACKET_SIZE * 5644
 
         # Create a buffer
         buffer = bytearray()
