@@ -172,7 +172,7 @@ For streams where the video and audio use different clearkeys, place them in a c
 
 You do not need to use Dispatchwrapparr in order to use the DASH and HLS DRM plugins. If you wish, you can use the `dashdrm.py` and `hlsdrm.py` plugins on their own with Streamlink.
 
-Credit: A huge thanks to [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) whose dashdrm plugin 
+Credit to [titus-au](https://github.com/titus-au/streamlink-plugin-dashdrm) whose work with DASH DRM and streamlink provided the basis by which the Dispatchwrapparr plugins are created.
 
 ## ‼️ Troubleshooting
 
@@ -194,9 +194,9 @@ This is a technology called SCTE-35 (aka. SSAI or DAI) which injects ads/commerc
 
 While dispatchwrapparr has had some success in dealing with these types of streams, due to the way that some broadcasters implement SCTE-35 it may not always be stable.
 
-### Can I use a custom Streamlink plugin?
+### Can I use a custom Streamlink plugin? (ie. one not included in Streamlink by default)
 
-Yes, maybe. Pass the `-streamlink_plugins` option to Dispatchwrapparr, specifying a custom directory to look for plugins in. In some circumstances, plugins may require Chromium based browsers for session tokens, and/or require additional arguments which Dispatchwrapparr will not pass through. The best option here is to just use Streamlink directly.
+Yes, maybe, but it depends on if you need to pass any custom arguments to it. Pass the `-streamlink_plugins` option to Dispatchwrapparr, specifying a custom directory to look for plugins in. In some circumstances, plugins may require Chromium based browsers for session tokens, and/or require additional arguments which Dispatchwrapparr will not pass through. The best option here is to just use Streamlink directly.
 
 ---
 
