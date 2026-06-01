@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.1"
+__version__ = "1.7.3"
 
 def parse_args():
     # Initial wrapper arguments
@@ -54,7 +54,7 @@ def parse_args():
     parser.add_argument("-loglevel", type=str, default="INFO", choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"], help="Enable logging and set log level. (default: INFO)")
     parser.add_argument("-v", "--version", action="version", version=f"Dispatchwrapparr {__version__}")
     # Deprecated features
-    parser.add_argument("-subtitles", action="store_true", help=argparse.SUPPRESS, deprecated=True)
+    parser.add_argument("-subtitles", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     # Enforce dependency for proxybypass, must be used with proxy
@@ -534,6 +534,7 @@ def detect_streams(session, url, clearkey):
             url = f"dashdrm://{url}"
         elif type == "hls":
             url = f"hlsdrm://{url}"
+            plugin_options.set("packed-audio", True)
         # Match plugin through new URL
         plugin_name, plugin_cls, url = session.resolve_url(url)
         plugin = plugin_cls(session, url, options=plugin_options)
@@ -585,6 +586,9 @@ def detect_streams(session, url, clearkey):
         elif plugin_name == "dash":
             # Use our own DASH handler for dash period change and pacing support
             streams = invoke_drm_plugin(session, url, plugin_name, None)
+        elif plugin_name == "hls":
+            # Use our own DASH handler for dash period change and pacing support
+            streams = invoke_drm_plugin(session, url, plugin_name, None)
             return streams
         else:
             log.debug(f"Plugin '{plugin_name}' matched via resolver")
@@ -612,8 +616,10 @@ def detect_streams(session, url, clearkey):
             
         elif stream_type == "hls":
             log.debug("HLS Stream Detected via MIME Type Resolver")
+            streams = invoke_drm_plugin(session, url, stream_type, None)
+            return streams
             streams = HLSStream.parse_variant_playlist(session, url)
-            return streams or {"live": HLSStream(session, url)}
+            #return streams or {"live": HLSStream(session, url)}
             
         elif stream_type == "http":
             log.debug("HTTP Stream Detected via MIME Type Resolver")
