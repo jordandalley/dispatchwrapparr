@@ -78,7 +78,6 @@ class HLSDRM(Plugin):
         streams = HLSStream.parse_variant_playlist(self.session, url, **params)
         if not streams:
             streams = {"live": HLSStream(self.session, url, **params)}
-        log.debug(f"Pre Streams: {streams}")
 
         wrapped_streams = {}
         for name, stream in streams.items():
@@ -92,7 +91,6 @@ class HLSDRM(Plugin):
                 # single stream with no decryption-key(s) provided. Just a dumb stream - pass through without muxing
                 wrapped_streams = streams
 
-        log.debug(f"Streams configured successfully: {list(wrapped_streams.keys())}")
         return wrapped_streams
 
     def _process_keys(self):
