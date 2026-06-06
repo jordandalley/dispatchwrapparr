@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.3"
+__version__ = "1.7.2"
 
 def parse_args():
     # Initial wrapper arguments
@@ -54,7 +54,7 @@ def parse_args():
     parser.add_argument("-loglevel", type=str, default="INFO", choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"], help="Enable logging and set log level. (default: INFO)")
     parser.add_argument("-v", "--version", action="version", version=f"Dispatchwrapparr {__version__}")
     # Deprecated features
-    parser.add_argument("-subtitles", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("-subtitles", action="store_true", help=argparse.SUPPRESS, deprecated=True)
     args = parser.parse_args()
 
     # Enforce dependency for proxybypass, must be used with proxy
