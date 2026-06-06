@@ -183,12 +183,6 @@ In Jellyfin there are a number of settings related to m3u8 manifests.
 
 Make sure that all options ("Allow fMP4 transcoding container", "Allow stream sharing", "Auto-loop live streams", "Ignore DTS (decoding timestamp)", and "Read input at native frame rate") are unticked/disabled.
 
-### My stream only plays audio or won't start
-
-Sometimes broadcasters don't include timestamps in the audio stream. Since version 1.6.2, Dispatchwrapparr tells ffmpeg to copy timestamps by default when muxing. There may be occasions where you may need to disable this feature.
-
-See the `-ffmpeg_nocopyts` option or `#ffmpeg_nocopyts=true` url fragment options for more details.
-
 ### My streams stop on ad breaks, why?
 
 This is a technology called SCTE-35 (aka. SSAI or DAI) which injects ads/commercial breaks into streams based on parameters such as geolocation and demographics etc.
