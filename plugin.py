@@ -10,7 +10,7 @@ from apps.plugins.models import PluginConfig
 
 class Plugin:
     name = "Dispatchwrapparr"
-    version = "1.7.2"
+    version = "1.7.3"
     description = "An intelligent DRM/Clearkey capable stream profile for Dispatcharr"
     profile_name = "Dispatchwrapparr"
     # Directory where dispatchwrapparr will be copied to

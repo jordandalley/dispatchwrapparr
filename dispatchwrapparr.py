@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.2"
+__version__ = "1.7.3"
 
 def parse_args():
     # Initial wrapper arguments
@@ -508,7 +508,7 @@ def parse_fragment_headers(raw_header_values: str | list[str] | None) -> dict[st
 
     return parsed_headers
 
-def detect_streams(session, url, clearkey):
+def detect_streams(session, url, clearkey=None):
     """
     Performs extended plugin matching for Streamlink
     Returns a dict of possible streams
@@ -570,63 +570,36 @@ def detect_streams(session, url, clearkey):
             stream_type = "http"
         else:
             stream_type = None
-
         return stream_type
 
     try:
         log.debug("First pass plugin matching with Streamlink Plugin Resolver...")
         plugin_name, plugin_cls, url = session.resolve_url(url)
         plugin = plugin_cls(session, url)
-        if plugin_name == "dash" and clearkey:
+        if plugin_name == "dash":
             streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
-            return streams
-        elif plugin_name == "hls" and clearkey:
-            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
-            return streams
-        elif plugin_name == "dash":
-            # Use our own DASH handler for dash period change and pacing support
-            streams = invoke_drm_plugin(session, url, plugin_name, None)
         elif plugin_name == "hls":
-            # Use our own DASH handler for dash period change and pacing support
-            streams = invoke_drm_plugin(session, url, plugin_name, None)
-            return streams
+            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
         else:
             log.debug(f"Plugin '{plugin_name}' matched via resolver")
-            return plugin.streams()
+            streams = plugin.streams()
+        return streams
         
     except NoPluginError:
         log.debug("Second pass plugin matching via MIME Type Resolver...")
-        stream_type = find_by_mime_type(session, url)
-        
-        if stream_type == "dash" and clearkey:
+        plugin_name = find_by_mime_type(session, url)
+        if plugin_name == "dash":
             log.debug("DASH DRM matched via MIME Type Resolver")
-            streams = invoke_drm_plugin(session, url, stream_type, clearkey)
-            return streams
-        
-        elif stream_type == "hls" and clearkey:
+            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
+        elif plugin_name == "hls":
             log.debug("HLS DRM matched via MIME Type Resolver")
-            streams = invoke_drm_plugin(session, url, stream_type, clearkey)
-            return streams
-        
-        elif stream_type == "dash":
-            log.debug("DASH Stream Detected via MIME Type Resolver")
-            # Use our own DASH handler for dash period change and pacing support
-            streams = invoke_drm_plugin(session, url, stream_type, None)
-            return streams
-            
-        elif stream_type == "hls":
-            log.debug("HLS Stream Detected via MIME Type Resolver")
-            streams = invoke_drm_plugin(session, url, stream_type, None)
-            return streams
-            streams = HLSStream.parse_variant_playlist(session, url)
-            #return streams or {"live": HLSStream(session, url)}
-            
-        elif stream_type == "http":
+            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
+        elif plugin_name == "http":
             log.debug("HTTP Stream Detected via MIME Type Resolver")
-            return {"live": HTTPStream(session, url)}
-            
+            streams = {"live": HTTPStream(session, url)}
         else:
             raise PluginError("Could not detect stream type or no suitable plugin found.")
+        return streams
 
 def check_stream_variant(stream, session=None):
     """ Checks for different stream variants:
