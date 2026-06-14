@@ -19,7 +19,7 @@ from requests.adapters import HTTPAdapter
 
 log = logging.getLogger(__name__)
 
-__version__ = "1.7.3"
+__version__ = "1.7.4"
 
 '''
 DASHDRM plugin for Dispatchwrapparr & Streamlink
@@ -36,6 +36,7 @@ It can also be used for normal DASH streams and supports shifting of periods due
   requests from blocking (dash-segment-stream-data).
 - The 'ignore-mup' option ignores the minimumUpdatePeriod in the manifest and clamps the refresh time to 5 seconds. This is useful where certain broadcasters add new segments at each update
   period that do not align with the minimumUpdatePeriod, causing gaps in playback.
+- The 'autodetect-epoch' option enables automatic detection of streams that use epoch-aligned manifests, and normalises the presentationTimeOffsets to zero.
 
 Thanks to Titus-AU, whose code is used as a reference and who laid a lot of a groundwork for DRM handling in Streamlink: https://github.com/titus-au
 '''
@@ -43,7 +44,8 @@ Thanks to Titus-AU, whose code is used as a reference and who laid a lot of a gr
 DASHDRM_OPTIONS = [
     "decryption-key",
     "dash-segment-stream-data",
-    "ignore-mup"
+    "ignore-mup",
+    "autodetect-epoch"
 ]
 @pluginmatcher(
     priority=HIGH_PRIORITY,
@@ -55,14 +57,19 @@ DASHDRM_OPTIONS = [
     help="Decryption key(s) to be passed to ffmpeg."
 )
 @pluginargument(
+    "dash-segment-stream-data",
+    action="store_true",
+    help="Same as 'hls-segment-stream-data' option in Streamlink, but for DASH"
+)
+@pluginargument(
     "ignore-mup",
     action="store_true",
     help="Ignore the manifest minimumUpdatePeriod to check for new segments more frequently"
 )
 @pluginargument(
-    "dash-segment-stream-data",
+    "autodetect-epoch",
     action="store_true",
-    help="Same as 'hls-segment-stream-data' option in Streamlink, but for DASH"
+    help="Enable automatic detection of epoch-aligned manifests and normalise presentationTimeOffsets to zero"
 )
 
 class MPEGDASHDRM(Plugin):
@@ -77,6 +84,32 @@ class MPEGDASHDRM(Plugin):
             return stream_weight(f"{match.group(2)}k")
         else:
             return stream_weight(stream)
+        
+    @staticmethod
+    def _process_epoch_aligned_presentation_offsets(mpd):
+        """
+        Function for detecting if the manifest contains epoch-aligned presentationTimeOffsets
+        and if so, zero's them out so Streamlink finds the live edge successfully
+        """
+        if mpd.type != "dynamic" or not getattr(mpd, "availabilityStartTime", None):
+            return
+
+        normalized = set()
+        for period in mpd.periods:
+            for adaptation_set in period.adaptationSets:
+                for representation in adaptation_set.representations:
+                    # find the template, whether it's on the representation or the adaptation set
+                    template = getattr(representation, "segmentTemplate", None) or representation.walk_back_get_attr("segmentTemplate")
+                    
+                    if not template or not getattr(template, "presentationTimeOffset", None) or id(template) in normalized:
+                        continue
+
+                    # extract total_seconds() from the timedelta object for the comparison
+                    if template.presentationTimeOffset.total_seconds() > 1000000000:
+                        log.debug(f"MPEGDASHDRM: Normalising epoch-aligned presentationTimeOffset for representation {representation.id}.")
+                        # zero out the offset using an empty timedelta object
+                        template.presentationTimeOffset = datetime.timedelta()
+                        normalized.add(id(template))
 
     def _get_streams(self):
         data = self.match.groupdict()
@@ -109,7 +142,11 @@ class MPEGDASHDRM(Plugin):
         
         wrapped_streams = {}
         for name, stream in streams.items():
-            # Apply the MUP override if the option is enabled
+            # normalise presentationTimeOffsets for epoch-aligned manifests when autodetect-epoch setting is enabled
+            if self.session.options.get("autodetect-epoch"):
+                log.debug("MPEGDASHDRM: Option 'autodetect-epoch' option specified. Normalising presentationTimeOffsets for epoch-aligned manifests.")
+                self._process_epoch_aligned_presentation_offsets(stream.mpd)
+            # apply the MUP override if the option is enabled
             if self.session.options.get("ignore-mup"):
                 if getattr(stream.mpd, 'minimumUpdatePeriod', None):
                     if stream.mpd.minimumUpdatePeriod.total_seconds() > 5.0:

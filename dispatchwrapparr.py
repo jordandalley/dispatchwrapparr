@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.3"
+__version__ = "1.7.4"
 
 def parse_args():
     # Initial wrapper arguments
@@ -529,8 +529,9 @@ def detect_streams(session, url, clearkey=None):
             plugin_options.set("decryption-key", [clearkey])
         # Set plugin matcher URL's for matching
         if type == "dash":
-            # By default, we'll ignore minimumUpdatePeriod
+            # By default, we'll ignore minimumUpdatePeriod and calculate availabilityStartTime from epoch if necessary
             plugin_options.set("ignore-mup", True)
+            plugin_options.set("autodetect-epoch", True)
             url = f"dashdrm://{url}"
         elif type == "hls":
             url = f"hlsdrm://{url}"
