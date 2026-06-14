@@ -94,14 +94,14 @@ class MPEGDASHDRM(Plugin):
         if mpd.type != "dynamic" or not getattr(mpd, "availabilityStartTime", None):
             return
 
-        normalized = set()
+        normalised = set()
         for period in mpd.periods:
             for adaptation_set in period.adaptationSets:
                 for representation in adaptation_set.representations:
                     # find the template, whether it's on the representation or the adaptation set
                     template = getattr(representation, "segmentTemplate", None) or representation.walk_back_get_attr("segmentTemplate")
                     
-                    if not template or not getattr(template, "presentationTimeOffset", None) or id(template) in normalized:
+                    if not template or not getattr(template, "presentationTimeOffset", None) or id(template) in normalised:
                         continue
 
                     # extract total_seconds() from the timedelta object for the comparison
@@ -109,7 +109,7 @@ class MPEGDASHDRM(Plugin):
                         log.debug(f"MPEGDASHDRM: Normalising epoch-aligned presentationTimeOffset for representation {representation.id}.")
                         # zero out the offset using an empty timedelta object
                         template.presentationTimeOffset = datetime.timedelta()
-                        normalized.add(id(template))
+                        normalised.add(id(template))
 
     def _get_streams(self):
         data = self.match.groupdict()
