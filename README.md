@@ -76,7 +76,11 @@ Important notes about fragment options:
 
 ### 🧑‍💻 Using the 'clearkey' URL fragment for DRM decryption
 
-To use a clearkey for a particular stream using a URL fragment, simply create a custom m3u8 file that places the #clearkey=<clearkey> fragment at the end of the stream URL.
+Most DRM implementations apply encryption across both audio and video streams with the same key.
+
+In this instance, you can simply just supply a clearkey. The HLSDRM and DASHDRM plugins will ignore any Key ID (KID) supplied to it.
+
+To use a single clearkey for a particular stream using a URL fragment, simply create a custom m3u8 file that places the #clearkey=<clearkey> fragment at the end of the stream URL.
 
 Below is an example that could be used for Channel 4 (UK):
 
@@ -86,11 +90,18 @@ Below is an example that could be used for Channel 4 (UK):
 https://olsp.live.dash.c4assets.com/dash_iso_sp_tl/live/channel(c4)/manifest.mpd#clearkey=5ce85f1aa5771900b952f0ba58857d7a
 ```
 
-You can also add the cleakey fragment to the end of a URL of a channel that you add manually into Dispatcharr.
+You can also add the cleakey fragment to the end of a URL of a channel that you add manually into Dispatcharr rather than administering a custom m3u8 file. This can be useful in testing.
 
 More channels can be added to the same m3u8 file, and may also contain a mixture of DRM and non-DRM encrypted streams.
 
 Simply upload your m3u8 file into Dispatcharr, select a Dispatchwrapparr stream profile, and it'll do the rest.
+
+For more complex streams that contain different clearkeys for video than audio, two keys can be provided. The below table outlines how the DASHDRM and HLSDRM streamlink plugins process clearkeys.
+
+| Example Fragment                                                                                        | Clearkey applied to VIDEO stream | Clearkey applied to AUDIO stream |
+| :---                                                                                                    | :---                             | :---                             |
+| #clearkey=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 00000000000000000000000000000   | 5ce85f1aa5771900b952f0ba58857d7a |
+| #clearkey=5ce85f1aa5771900b952f0ba58857d7a,5ce85f1aa5771900b952f0ba58857d7b                             | 0000  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 000000000000000000000000000 | 11111111111111111111111111111111 |
 
 ### ▶️ Using the 'stream' URL fragment for manual stream variant/quality selection
 
