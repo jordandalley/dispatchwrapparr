@@ -76,7 +76,7 @@ Important notes about fragment options:
 
 ### 🧑‍💻 Using the 'clearkey' URL fragment for DRM decryption
 
-Most DRM implementations apply encryption across both audio and video streams with the same key.
+Most DRM implementations apply consistent encryption across both audio and video streams by using the same key.
 
 In this instance, you can simply just supply a clearkey. The HLSDRM and DASHDRM plugins will ignore any Key ID (KID) supplied to it.
 
@@ -90,18 +90,24 @@ Below is an example that could be used for Channel 4 (UK):
 https://olsp.live.dash.c4assets.com/dash_iso_sp_tl/live/channel(c4)/manifest.mpd#clearkey=5ce85f1aa5771900b952f0ba58857d7a
 ```
 
-You can also add the cleakey fragment to the end of a URL of a channel that you add manually into Dispatcharr rather than administering a custom m3u8 file. This can be useful in testing.
-
 More channels can be added to the same m3u8 file, and may also contain a mixture of DRM and non-DRM encrypted streams.
 
 Simply upload your m3u8 file into Dispatcharr, select a Dispatchwrapparr stream profile, and it'll do the rest.
 
-For more complex streams that contain different clearkeys for video than audio, two keys can be provided. The below table outlines how the DASHDRM and HLSDRM streamlink plugins process clearkeys.
+You can also add a cleakey fragment to the end of a URL of a stream being manually entered into Dispatcharr rather than administering a custom m3u8 file. This can be useful in testing.
+
+For more complex streams that contain different clearkeys for video and audio, two keys can be provided in the order of 'video,audio'.
+
+Streams which contain separate audio and video feeds, where only one is encrypted can specify 'none' as the key at the position.
+
+The below table provides real world examples of how the DASHDRM and HLSDRM streamlink plugins process clearkeys.
 
 | Example Fragment                                                                                        | Clearkey applied to VIDEO stream | Clearkey applied to AUDIO stream |
 | :---                                                                                                    | :---                             | :---                             |
-| #clearkey=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 00000000000000000000000000000   | 5ce85f1aa5771900b952f0ba58857d7a |
-| #clearkey=5ce85f1aa5771900b952f0ba58857d7a,5ce85f1aa5771900b952f0ba58857d7b                             | 0000  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 000000000000000000000000000 | 11111111111111111111111111111111 |
+| #clearkey=a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0                                                              | a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0 | a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0 |
+| #clearkey=a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0,b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1                             | a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0 | b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1 |
+| #clearkey=a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0,none                                                         | a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0 | None (Unencrypted)               |
+| #clearkey=none,b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1                                                         | None (Unencrypted)               | b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1 |
 
 ### ▶️ Using the 'stream' URL fragment for manual stream variant/quality selection
 
