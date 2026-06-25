@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.4"
+__version__ = "1.7.5"
 
 def parse_args():
     # Initial wrapper arguments
@@ -526,7 +526,7 @@ def detect_streams(session, url, clearkey=None):
         plugin_options = Options()
         if clearkey:
             # Set decryption keys for HLS/DASH DRM plugins
-            plugin_options.set("decryption-key", [clearkey])
+            plugin_options.set("decryption-key", clearkey.split(","))
         # Set plugin matcher URL's for matching
         if type == "dash":
             # By default, we'll ignore minimumUpdatePeriod and calculate availabilityStartTime from epoch if necessary

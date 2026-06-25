@@ -19,7 +19,7 @@ from requests.adapters import HTTPAdapter
 
 log = logging.getLogger(__name__)
 
-__version__ = "1.7.4"
+__version__ = "1.7.5"
 
 '''
 DASHDRM plugin for Dispatchwrapparr & Streamlink
@@ -163,34 +163,53 @@ class MPEGDASHDRM(Plugin):
         Based on work by Titus-AU: https://github.com/titus-au (Thank you!!)
         '''
         keys = self.get_option('decryption-key')
-        # if a colon separated key is given, assume its kid:key and take the
-        # last component after the colon
         return_keys = []
+        
         for k in keys:
+            if k.lower() == "none":
+                return_keys.append(None)
+                continue
+                
             key = k.split(':')
-            key_len = len(key[-1])
-            log.debug("MPEGDASHDRM: Decryption Key %s has %s digits", key[-1], key_len)
-            if key_len in (21, 22, 23, 24):
-                # key len of 21-24 may mean a base64 key was provided, so we 
-                # try and decode it
-                log.debug("MPEGDASHDRM: Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
-                b64_string = key[-1]
-                padding = 4 - (len(b64_string) % 4)
-                b64_string = b64_string + ("=" * padding)
-                b64_key = base64.urlsafe_b64decode(b64_string).hex()
-                if b64_key:
-                    key = [b64_key]
-                    key_len = len(b64_key)
-                    log.debug("MPEGDASHDRM: Decryption Key (post base64 decode) is %s and has %s digits", key[-1], key_len)
+            key_val = key[-1]
+            key_len = len(key_val)
+            log.debug("MPEGDASHDRM: Decryption Key %s has %s digits", key_val, key_len)
+            
+            is_valid_hex = False
             if key_len == 32:
-                # sanity check that it's a valid hex string
                 try:
-                    int(key[-1], 16)
-                except ValueError as err:
-                    raise FatalPluginError(f"MPEGDASHDRM: Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
-            elif key_len != 32:
-                raise FatalPluginError(f"MPEGDASHDRM: Expecting 128bit key in 32 hex digits.")
-            return_keys.append(key[-1])
+                    int(key_val, 16)
+                    is_valid_hex = True
+                except ValueError:
+                    pass
+            
+            if not is_valid_hex:
+                try:
+                    padding = 4 - (key_len % 4)
+                    b64_string = key_val + ("=" * padding) if padding != 4 else key_val
+                    decoded_bytes = base64.urlsafe_b64decode(b64_string)
+                    
+                    if len(decoded_bytes) == 16:
+                        # Handle base64 encoded raw bytes
+                        key_val = decoded_bytes.hex()
+                    elif len(decoded_bytes) == 32:
+                        # Handle base64 encoded hex strings (e.g. YmQ3ZWVh...)
+                        key_val = decoded_bytes.decode('utf-8')
+                        int(key_val, 16)  # Validate it's hex
+                    else:
+                        raise ValueError
+                except Exception:
+                    raise FatalPluginError("MPEGDASHDRM: Expecting 128bit key in 32 hex digits, or base64 equivalent.")
+                    
+            if len(key_val) != 32:
+                raise FatalPluginError("MPEGDASHDRM: Expecting 128bit key in 32 hex digits.")
+                
+            return_keys.append(key_val)
+            
+        # Duplicate if only a single key is provided
+        if len(return_keys) == 1:
+            return_keys.append(return_keys[0])
+            
         return return_keys
 
 class FFMPEGMuxerDRM(FFMPEGMuxer):
@@ -201,12 +220,8 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
 
     @classmethod
     def _get_keys(cls, session):
-        keys=[]
-        if session.options.get("decryption-key"):
-            keys = session.options.get("decryption-key")
-            # If only 1 key is given, then we use that also for all remaining streams
-            if len(keys) == 1:
-                keys.extend(keys)
+        keys = session.options.get("decryption-key") or []
+        if keys:
             log.debug("FFMPEGMuxerDRM: Decryption Keys %s", keys)
         return keys
 
@@ -220,6 +235,7 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
         # begin building a new ffmpeg command list
         old_cmd = self._cmd.copy()
         self._cmd = []
+
         while len(old_cmd) > 0:
             cmd = old_cmd.pop(0)
             if cmd == "-i":
@@ -228,8 +244,10 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
                 self._cmd.extend(['-thread_queue_size', '5120'])
                 # generate presentation timestamps from dts
                 self._cmd.extend(['-fflags', '+genpts'])
+                
                 if keys:
-                    self._cmd.extend(["-decryption_key", keys[key]])
+                    if keys[key] is not None:
+                        self._cmd.extend(["-decryption_key", keys[key]])
                     key += 1
                     # If we had more streams than keys, start with the first audio key again
                     if key == len(keys):
@@ -237,6 +255,7 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
                 self._cmd.extend([cmd, _])
             else:
                 self._cmd.append(cmd)
+
         # pop the last argument (the output pipe, e.g., "pipe:1")
         output_pipe = self._cmd.pop()
         # ffmpeg output options here if needed

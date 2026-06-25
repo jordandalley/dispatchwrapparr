@@ -15,7 +15,7 @@ from streamlink.utils.url import update_scheme
 
 log = logging.getLogger(__name__)
 
-__version__ = "1.7.4"
+__version__ = "1.7.5"
 
 '''
 HLSDRM plugin for Dispatchwrapparr & Streamlink
@@ -99,34 +99,51 @@ class HLSDRM(Plugin):
         Based on work by Titus-AU: https://github.com/titus-au (Thank you!!)
         '''
         keys = self.get_option('decryption-key')
-        # if a colon separated key is given, assume its kid:key and take the
-        # last component after the colon
         return_keys = []
+        
         for k in keys:
+            if k.lower() == "none":
+                return_keys.append(None)
+                continue
+                
             key = k.split(':')
-            key_len = len(key[-1])
-            log.debug("HLSDRM: Decryption Key %s has %s digits", key[-1], key_len)
-            if key_len in (21, 22, 23, 24):
-                # key len of 21-24 may mean a base64 key was provided, so we 
-                # try and decode it
-                log.debug("HLSDRM: Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
-                b64_string = key[-1]
-                padding = 4 - (len(b64_string) % 4)
-                b64_string = b64_string + ("=" * padding)
-                b64_key = base64.urlsafe_b64decode(b64_string).hex()
-                if b64_key:
-                    key = [b64_key]
-                    key_len = len(b64_key)
-                    log.debug("HLSDRM: Decryption Key (post base64 decode) is %s and has %s digits", key[-1], key_len)
+            key_val = key[-1]
+            key_len = len(key_val)
+            log.debug("HLSDRM: Decryption Key %s has %s digits", key_val, key_len)
+            
+            is_valid_hex = False
             if key_len == 32:
-                # sanity check that it's a valid hex string
                 try:
-                    int(key[-1], 16)
-                except ValueError as err:
-                    raise FatalPluginError(f"HLSDRM: Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
-            elif key_len != 32:
-                raise FatalPluginError(f"HLSDRM: Expecting 128bit key in 32 hex digits.")
-            return_keys.append(key[-1])
+                    int(key_val, 16)
+                    is_valid_hex = True
+                except ValueError:
+                    pass
+            
+            if not is_valid_hex:
+                try:
+                    padding = 4 - (key_len % 4)
+                    b64_string = key_val + ("=" * padding) if padding != 4 else key_val
+                    decoded_bytes = base64.urlsafe_b64decode(b64_string)
+                    
+                    if len(decoded_bytes) == 16:
+                        key_val = decoded_bytes.hex()
+                    elif len(decoded_bytes) == 32:
+                        key_val = decoded_bytes.decode('utf-8')
+                        int(key_val, 16)
+                    else:
+                        raise ValueError
+                except Exception:
+                    raise FatalPluginError("HLSDRM: Expecting 128bit key in 32 hex digits, or base64 equivalent.")
+                    
+            if len(key_val) != 32:
+                raise FatalPluginError("HLSDRM: Expecting 128bit key in 32 hex digits.")
+                
+            return_keys.append(key_val)
+            
+        # Duplicate if only a single key is provided
+        if len(return_keys) == 1:
+            return_keys.append(return_keys[0])
+            
         return return_keys
 
 class FFMPEGMuxerDRM(FFMPEGMuxer):
@@ -137,12 +154,7 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
 
     @classmethod
     def _get_keys(cls, session):
-        keys=[]
-        if session.options.get("decryption-key"):
-            keys = session.options.get("decryption-key")
-            # If only 1 key is given, then we use that also for all remaining streams
-            if len(keys) == 1:
-                keys.extend(keys)
+        keys = session.options.get("decryption-key") or []
         return keys
 
     def __init__(self, session, *streams, **options):
@@ -154,8 +166,8 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
 
         keys = self._get_keys(session)
         key = 0
-        # input counter
         input = 0
+
         # begin building a new ffmpeg command list
         old_cmd = self._cmd.copy()
         self._cmd = []
@@ -176,7 +188,9 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
                         # apply timestamp offset for packed audio input
                         self._cmd.extend(['-itsoffset', f'{self.audio_pts/self.audio_clock}'])
                 if keys:
-                    self._cmd.extend(["-decryption_key", keys[key]])
+                    # check for keys and only provide -decryption_key if not None
+                    if keys[key] is not None:
+                        self._cmd.extend(["-decryption_key", keys[key]])
                     key += 1
                     if key == len(keys):
                         key = 1
@@ -252,6 +266,7 @@ class SingleStreamDRM(Stream):
         fmt = self.session.options.get("ffmpeg-fout") or "mpegts"
         copyts = self.session.options.get("ffmpeg-copyts")
         if copyts is None: copyts = True
+        log.debug("Forcing Muxing for single")
             
         muxer = FFMPEGMuxerDRM(self.session, reader, format=fmt, copyts=copyts)
         return muxer.open()
