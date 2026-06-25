@@ -160,7 +160,6 @@ class PlayRadio:
         cmd.extend([
             "-re", # read at native rate
             "-readrate_initial_burst", "20", # initial burst of 20 seconds for fast startup
-            "-copyts", "-start_at_zero", # copy timestamps but start them at zero so it syncs with video stream
             "-i", self.url,
             "-f", "lavfi",
             "-re", # read at native rate
@@ -508,10 +507,13 @@ def parse_fragment_headers(raw_header_values: str | list[str] | None) -> dict[st
 
     return parsed_headers
 
-def detect_streams(session, url, clearkey=None):
+def detect_streams(session, url, options):
     """
-    Performs extended plugin matching for Streamlink
-    Returns a dict of possible streams
+    1. Performs extended plugin matching for Streamlink
+    2. Creates a dict of possible streams
+    3. Selects the best stream from that dict (streams)
+    4. Performs stream variant checking to determine if a stream is audio or video only
+    5. Returns a stream for opening 
     """
 
     def invoke_drm_plugin(session, url, type, clearkey):
@@ -572,121 +574,171 @@ def detect_streams(session, url, clearkey=None):
         else:
             stream_type = None
         return stream_type
+    
+    def create_silent_audio(session, ffmpeg, ffmpeg_loglevel) -> Stream:
+        """
+        Return a Streamlink-compatible Stream that produces continuous silent AAC audio.
+        Uses ffmpeg with anullsrc.
+        """
+
+        cmd = [
+            ffmpeg,
+            "-loglevel", ffmpeg_loglevel,
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-c:a", "aac",
+            "-f", "adts",
+            "pipe:1"
+        ]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=sys.stderr)
+
+        class SilentAudioStream(Stream):
+            def open(self, *args, **kwargs):
+                return process.stdout
+
+            def close(self):
+                if process.poll() is None:
+                    process.kill()
+
+        return SilentAudioStream(session)
+    
+    def check_stream_variant(stream, session=None):
+        """ Checks for different stream variants:
+        Eg. Audio Only streams or Video streams with no audio
+
+        Can be disabled by using the -nocheckvariant argument
+
+        Returns integer:
+        0 = Normal Audio/Video
+        1 = Audio Only Stream (Radio streams)
+        2 = Video Only Stream (Cameras or other livestreams with no audio)
+        """
+
+        log.debug("Starting Stream Variant Checks...")
+        # HLSStream case
+        if isinstance(stream, HLSStream) and getattr(stream, "multivariant", None):
+            log.debug("Variant Check: HLSStream Selected")
+            # Find the playlist attributes by "best" selected url
+            selected_playlist = None
+            for playlist in stream.multivariant.playlists:
+                if playlist.uri == stream.url:
+                    selected_playlist = playlist
+                    break
+
+            if selected_playlist:
+                codecs = selected_playlist.stream_info.codecs or []
+                log.debug(f"Stream Codecs: {codecs}")
+                # Check for audio/video presence
+                has_video = any(c.startswith(("avc", "hev", "vp")) for c in codecs)
+                has_audio = any(c.startswith(("mp4a", "aac")) for c in codecs)
+
+                if has_audio and not has_video:
+                    log.debug("Detected Audio Only Stream")
+                    return 1
+                elif has_video and not has_audio:
+                    log.debug("Detected Video Only Stream")
+                    return 2
+                else:
+                    log.debug("Detected Audio+Video Stream")
+                    return 0
+
+        # HTTPStream case
+        if isinstance(stream, HTTPStream):
+            log.debug("Variant Check: HTTPStream Selected")
+            if session:
+                try:
+                    with session.http.get(stream.url, stream=True, timeout=5) as r:
+                        ctype = r.headers.get("Content-Type", "").lower()
+                        if ctype.startswith("audio/") or ctype.endswith("/ogg"):
+                            log.debug(f"Detected Audio Only Stream by Content-Type: {ctype}")
+                            return 1
+                        if ctype.startswith("video/"):
+                            log.debug(f"Detected Video+Audio Stream by Content-Type: {ctype}")
+                            return 0
+                except Exception:
+                    # Ignore errors (405, timeout, etc.)
+                    return 0
+        # Default/fallback
+        return 0
 
     try:
         log.debug("First pass plugin matching with Streamlink Plugin Resolver...")
         plugin_name, plugin_cls, url = session.resolve_url(url)
         plugin = plugin_cls(session, url)
         if plugin_name == "dash":
-            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
+            streams = invoke_drm_plugin(session, url, plugin_name, options.clearkey)
         elif plugin_name == "hls":
-            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
+            streams = invoke_drm_plugin(session, url, plugin_name, options.clearkey)
         else:
             log.debug(f"Plugin '{plugin_name}' matched via resolver")
             streams = plugin.streams()
-        return streams
         
     except NoPluginError:
         log.debug("Second pass plugin matching via MIME Type Resolver...")
         plugin_name = find_by_mime_type(session, url)
         if plugin_name == "dash":
             log.debug("DASH DRM matched via MIME Type Resolver")
-            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
+            streams = invoke_drm_plugin(session, url, plugin_name, options.clearkey)
         elif plugin_name == "hls":
             log.debug("HLS DRM matched via MIME Type Resolver")
-            streams = invoke_drm_plugin(session, url, plugin_name, clearkey)
+            streams = invoke_drm_plugin(session, url, plugin_name, options.clearkey)
         elif plugin_name == "http":
             log.debug("HTTP Stream Detected via MIME Type Resolver")
             streams = {"live": HTTPStream(session, url)}
         else:
             raise PluginError("Could not detect stream type or no suitable plugin found.")
-        return streams
 
-def check_stream_variant(stream, session=None):
-    """ Checks for different stream variants:
-    Eg. Audio Only streams or Video streams with no audio
+    if not streams:
+        log.error("No playable streams found.")
+        return None
+    
+    log.info(f"Available streams: {', '.join(streams.keys())}")
 
-    Can be disabled by using the -nocheckvariant argument
+    # Logic for either manual or automatic stream selection
+    if options.stream:
+        # 'stream' fragment found. Select stream based on that selection.
+        log.info(f"Stream Selection: Manually specifying {options.stream}")
+        stream = streams.get(options.stream)
+    else:
+        log.info("Stream Selection: Automatic")
+        stream = streams.get("best") or streams.get("live") or next(iter(streams.values()), None)
 
-    Returns integer:
-    0 = Normal Audio/Video
-    1 = Audio Only Stream (Radio streams)
-    2 = Video Only Stream (Cameras or other livestreams with no audio)
-    """
+    # Stream not available, log error and exit
+    if not stream:
+        log.error("Stream selection not available.")
+        return
 
-    log.debug("Starting Stream Variant Checks...")
-    # HLSStream case
-    if isinstance(stream, HLSStream) and getattr(stream, "multivariant", None):
-        log.debug("Variant Check: HLSStream Selected")
-        # Find the playlist attributes by "best" selected url
-        selected_playlist = None
-        for playlist in stream.multivariant.playlists:
-            if playlist.uri == stream.url:
-                selected_playlist = playlist
-                break
+    if options.novideo is False and options.noaudio is False and options.novariantcheck is False and options.clearkey is None:
+        # Attempt to detect stream variant automatically (Eg. Video Only or Audio Only)
+        log.info("Checking stream variant")
+        variant = check_stream_variant(stream,session)
+        if variant == 1:
+            log.info("Stream detected as audio only/no video")
+            options.novideo = True
+        if variant == 2:
+            log.info("Stream detected as video only/no audio")
+            options.noaudio = True
+    else:
+        log.info("Skipping stream variant check")
 
-        if selected_playlist:
-            codecs = selected_playlist.stream_info.codecs or []
-            log.debug(f"Stream Codecs: {codecs}")
-            # Check for audio/video presence
-            has_video = any(c.startswith(("avc", "hev", "vp")) for c in codecs)
-            has_audio = any(c.startswith(("mp4a", "aac")) for c in codecs)
+    if options.noaudio and not options.novideo and not options.clearkey:
+        log.info("No Audio: Muxing silent audio into supplied video stream")
+        audio_stream = create_silent_audio(session,options.ffmpeg,options.ffmpeg_loglevel)
+        video_stream = stream
+        stream = MuxedStream(session, video_stream, audio_stream)
 
-            if has_audio and not has_video:
-                log.debug("Detected Audio Only Stream")
-                return 1
-            elif has_video and not has_audio:
-                log.debug("Detected Video Only Stream")
-                return 2
-            else:
-                log.debug("Detected Audio+Video Stream")
-                return 0
+    if not options.noaudio and options.novideo and not options.clearkey:
+        log.info("No Video: Muxing blank video into supplied audio stream")
+        stream_type = None
+        if options.nosonginfo is False:
+            if isinstance(stream, HLSStream):
+                stream_type = "hls"
+            elif isinstance(stream, HTTPStream):
+                stream_type = "icy"
+        stream = PlayRadio(url, session.options.get("ffmpeg-ffmpeg"), options.ffmpeg_loglevel, headers=None, cookies=None, stream_type=stream_type)
 
-    # HTTPStream case
-    if isinstance(stream, HTTPStream):
-        log.debug("Variant Check: HTTPStream Selected")
-        if session:
-            try:
-                with session.http.get(stream.url, stream=True, timeout=5) as r:
-                    ctype = r.headers.get("Content-Type", "").lower()
-                    if ctype.startswith("audio/") or ctype.endswith("/ogg"):
-                        log.debug(f"Detected Audio Only Stream by Content-Type: {ctype}")
-                        return 1
-                    if ctype.startswith("video/"):
-                        log.debug(f"Detected Video+Audio Stream by Content-Type: {ctype}")
-                        return 0
-            except Exception:
-                # Ignore errors (405, timeout, etc.)
-                return 0
-    # Default/fallback
-    return 0
+    return stream
 
-def create_silent_audio(session, ffmpeg, ffmpeg_loglevel) -> Stream:
-    """
-    Return a Streamlink-compatible Stream that produces continuous silent AAC audio.
-    Uses ffmpeg with anullsrc.
-    """
-
-    cmd = [
-        ffmpeg,
-        "-loglevel", ffmpeg_loglevel,
-        "-f", "lavfi",
-        "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-c:a", "aac",
-        "-f", "adts",
-        "pipe:1"
-    ]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=sys.stderr)
-
-    class SilentAudioStream(Stream):
-        def open(self, *args, **kwargs):
-            return process.stdout
-
-        def close(self):
-            if process.poll() is None:
-                process.kill()
-
-    return SilentAudioStream(session)
 
 def main():
     # Set log as global var
@@ -774,8 +826,6 @@ def main():
 
     # Set generic session options for Streamlink
     session.set_option("stream-segment-threads", 2)
-    # Start HLS stream further in from the live edge
-    session.set_option("hls-live-edge", 6)
     # Increase the size of the Streamlink Ringbuffer to 64MiB
     session.set_option("ringbuffer-size", 67108864)
     # If cli -proxy argument supplied
@@ -797,7 +847,7 @@ def main():
     FFmpeg Options that apply to all streams should they require muxing
     """
 
-    # Check for -ffmpeg cli option
+    # Check for -ffmpeg cli option for custom paths
     if dw_opts.ffmpeg:
         session.set_option("ffmpeg-ffmpeg", dw_opts.ffmpeg)
         log.info(f"FFmpeg: Location '{dw_opts.ffmpeg}'")
@@ -811,12 +861,15 @@ def main():
         else:
             # set global ffmpeg if no other found
             session.set_option("ffmpeg-ffmpeg", "ffmpeg")
+    # Set copy timestamps for ffmpeg muxing based on user input
+    if dw_opts.ffmpeg_nocopyts:
+        session.set_option("ffmpeg-copyts", False)
+        log.info("FFmpeg: Copying of timestamps disabled by ffmpeg-nocopyts option")
+    else:
+        session.set_option("ffmpeg-copyts", True)
     if dw_opts.ffmpeg_transcode_audio:
         session.set_option("ffmpeg-audio-transcode", dw_opts.ffmpeg_transcode_audio)
         log.info(f"FFmpeg: Transcode audio to '{dw_opts.ffmpeg_transcode_audio}'")
-    # Set copy timestamps for ffmpeg muxing based on user input
-    session.set_option("ffmpeg-copyts", not dw_opts.ffmpeg_nocopyts) 
-    log.info(f"FFmpeg: Set copy timestamps to '{not dw_opts.ffmpeg_nocopyts}'")
     # Convert current python loglevel in an equivalent ffmpeg loglevel
     dw_opts.ffmpeg_loglevel = get_ffmpeg_loglevel(dw_opts.loglevel)
     session.set_option("ffmpeg-loglevel", dw_opts.ffmpeg_loglevel) # Set ffmpeg loglevel
@@ -828,75 +881,12 @@ def main():
     Stream detection and plugin loading
     """
 
-    try:
-        # Pass stream detection off to the detect_streams function. Returns a dict of available streams in varying quality.
-        streams = detect_streams(session, url, dw_opts.clearkey)
-    except Exception as e:
-        log.error(f"Stream setup failed: {e}")
-        return
-
-    # No streams found, log and error and exit
-    if not streams:
-        log.error("No playable streams found.")
-        return
-
-    # Send a list of available streams to log output
-    log.info(f"Available streams: {', '.join(streams.keys())}")
+    # Pass streamlink session, url and dispatchwrapparr options into detect_streams function
+    stream = detect_streams(session, url, dw_opts)
 
     """
-    Select the best stream(s) from the list of streams
+    Start the stream
     """
-
-    # Logic for either manual or automatic stream selection
-    if dw_opts.stream:
-        # 'stream' fragment found. Select stream based on that selection.
-        log.info(f"Stream Selection: Manually specifying {dw_opts.stream}")
-        stream = streams.get(dw_opts.stream)
-    else:
-        log.info("Stream Selection: Automatic")
-        stream = streams.get("best") or streams.get("live") or next(iter(streams.values()), None)
-
-    # Stream not available, log error and exit
-    if not stream:
-        log.error("Stream selection not available.")
-        return
-
-    """
-    Check the chosen stream for nuances such as video-only or audio-only feeds
-    """
-
-    # Do a variant check only if novideo, noaudio and novariantcheck are False and there dw_opts.clearkey is None
-    if dw_opts.novideo is False and dw_opts.noaudio is False and dw_opts.novariantcheck is False and dw_opts.clearkey is None:
-        # Attempt to detect stream variant automatically (Eg. Video Only or Audio Only)
-        log.debug("Checking stream variation...")
-        variant = check_stream_variant(stream,session)
-        if variant == 1:
-            log.info("Stream detected as audio only/no video")
-            dw_opts.novideo = True
-        if variant == 2:
-            log.info("Stream detected as video only/no audio")
-            dw_opts.noaudio = True
-    else:
-        log.info("Skipping stream variant check")
-
-    if dw_opts.noaudio and not dw_opts.novideo and not dw_opts.clearkey:
-        log.info("No Audio: Muxing silent audio into supplied video stream")
-        audio_stream = create_silent_audio(session,dw_opts.ffmpeg,dw_opts.ffmpeg_loglevel)
-        video_stream = stream
-        stream = MuxedStream(session, video_stream, audio_stream)
-
-    elif not dw_opts.noaudio and dw_opts.novideo and not dw_opts.clearkey:
-        log.info("No Video: Muxing blank video into supplied audio stream")
-        stream_type = None
-        if dw_opts.nosonginfo is False:
-            if isinstance(stream, HLSStream):
-                stream_type = "hls"
-            elif isinstance(stream, HTTPStream):
-                stream_type = "icy"
-        stream = PlayRadio(url, session.options.get("ffmpeg-ffmpeg"), dw_opts.ffmpeg_loglevel, headers=None, cookies=None, stream_type=stream_type)
-
-    elif dw_opts.noaudio and dw_opts.novideo:
-        log.warning("Both 'noaudio' and 'novideo' specified. Ignoring both.")
 
     try:
         log.info("Starting stream...")
