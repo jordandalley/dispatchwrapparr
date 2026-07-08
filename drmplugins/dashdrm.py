@@ -19,7 +19,7 @@ from requests.adapters import HTTPAdapter
 
 log = logging.getLogger(__name__)
 
-__version__ = "1.7.5"
+__version__ = "1.7.6"
 
 '''
 DASHDRM plugin for Dispatchwrapparr & Streamlink

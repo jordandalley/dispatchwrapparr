@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.5"
+__version__ = "1.7.6"
 
 def parse_args():
     # Initial wrapper arguments
@@ -116,7 +116,7 @@ class PlayRadio:
     the case of available metadata, displays song information for use on TV's.
     """
 
-    def __init__(self, url, ffmpeg, ffmpeg_loglevel, headers, cookies, stream_type=None, resolution="854x480", fps=25, acodec="aac", vcodec="libx264", fontsize=22, update_interval=5):
+    def __init__(self, url, ffmpeg, ffmpeg_loglevel, headers, cookies, stream_type=None, resolution="854x480", fps=25, acodec="eac3", vcodec="libx264", fontsize=22, update_interval=5):
         self.url = url
         self.stream_type = stream_type
         self.ffmpeg = ffmpeg
@@ -158,13 +158,8 @@ class PlayRadio:
             cmd.extend(["-cookies", cookie_str])
 
         cmd.extend([
-            "-re", # read at native rate
-            "-readrate_initial_burst", "20", # initial burst of 20 seconds for fast startup
             "-i", self.url,
             "-f", "lavfi",
-            "-re", # read at native rate
-            "-readrate_initial_burst", "20", # initial burst of 20 seconds for fast startup
-            "-copyts", "-start_at_zero", # copy timestamps but start them at zero so it syncs with audio stream
             "-i", f"color=size={self.resolution}:rate={self.fps}:color=black"
         ])
 
@@ -178,10 +173,12 @@ class PlayRadio:
         cmd.extend([
             "-c:v", self.vcodec,
             "-c:a", self.acodec,
-            "-af", "loudnorm=I=-18:LRA=11:TP=-2:linear=true",
+            "-af", "loudnorm=I=-16",
+            "-copyts", "-start_at_zero", # copy timestamps but start them at zero so it syncs with audio stream - move to output option
             "-f", "mpegts",
             "pipe:1",
         ])
+
 
         self.process = subprocess.Popen(
             cmd,
@@ -629,7 +626,7 @@ def detect_streams(session, url, options):
                 codecs = selected_playlist.stream_info.codecs or []
                 log.debug(f"Stream Codecs: {codecs}")
                 # Check for audio/video presence
-                has_video = any(c.startswith(("avc", "hev", "vp")) for c in codecs)
+                has_video = any(c.startswith(("avc", "hev", "hvc", "vp")) for c in codecs)
                 has_audio = any(c.startswith(("mp4a", "aac")) for c in codecs)
 
                 if has_audio and not has_video:
@@ -738,7 +735,6 @@ def detect_streams(session, url, options):
         stream = PlayRadio(url, session.options.get("ffmpeg-ffmpeg"), options.ffmpeg_loglevel, headers=None, cookies=None, stream_type=stream_type)
 
     return stream
-
 
 def main():
     # Set log as global var
