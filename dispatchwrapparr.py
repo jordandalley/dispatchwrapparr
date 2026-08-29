@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.6"
+__version__ = "1.7.7"
 
 def parse_args():
     # Initial wrapper arguments
@@ -174,7 +174,6 @@ class PlayRadio:
             "-c:v", self.vcodec,
             "-c:a", self.acodec,
             "-af", "loudnorm=I=-16",
-            "-copyts", "-start_at_zero", # copy timestamps but start them at zero so it syncs with audio stream - move to output option
             "-f", "mpegts",
             "pipe:1",
         ])

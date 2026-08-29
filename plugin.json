@@ -1,6 +1,6 @@
 {
   "name": "Dispatchwrapparr",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "description": "An intelligent DRM/Clearkey capable stream profile for Dispatcharr",
   "author": "jordandalley",
   "maintainers": ["michaelmurfy"],
