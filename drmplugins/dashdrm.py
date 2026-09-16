@@ -19,7 +19,7 @@ from requests.adapters import HTTPAdapter
 
 log = logging.getLogger(__name__)
 
-__version__ = "1.7.7"
+__version__ = "1.7.8"
 
 '''
 DASHDRM plugin for Dispatchwrapparr & Streamlink
@@ -173,7 +173,7 @@ class MPEGDASHDRM(Plugin):
             key = k.split(':')
             key_val = key[-1]
             key_len = len(key_val)
-            log.debug("MPEGDASHDRM: Decryption Key %s has %s digits", key_val, key_len)
+            log.debug("PROCESSKEYS: Decryption Key %s has %s digits", key_val, key_len)
             
             is_valid_hex = False
             if key_len == 32:
@@ -199,10 +199,10 @@ class MPEGDASHDRM(Plugin):
                     else:
                         raise ValueError
                 except Exception:
-                    raise FatalPluginError("MPEGDASHDRM: Expecting 128bit key in 32 hex digits, or base64 equivalent.")
+                    raise FatalPluginError("PROCESSKEYS: Expecting 128bit key in 32 hex digits, or base64 equivalent.")
                     
             if len(key_val) != 32:
-                raise FatalPluginError("MPEGDASHDRM: Expecting 128bit key in 32 hex digits.")
+                raise FatalPluginError("PROCESSKEYS: Expecting 128bit key in 32 hex digits.")
                 
             return_keys.append(key_val)
             

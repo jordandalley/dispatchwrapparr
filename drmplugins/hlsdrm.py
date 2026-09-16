@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import logging
 import base64
-import struct
 
 from streamlink.exceptions import FatalPluginError
 from streamlink.plugin import Plugin, pluginmatcher, pluginargument
@@ -15,11 +14,11 @@ from streamlink.utils.url import update_scheme
 
 log = logging.getLogger(__name__)
 
-__version__ = "1.7.7"
+__version__ = "1.7.8"
 
 '''
 HLSDRM plugin for Dispatchwrapparr & Streamlink
-Requires: Streamlink >= 8.4.0
+Requires: Streamlink >= 8.6.0
 
 Trying to keep this implementation as lite-touch as possible and just let Streamlink do what it does best and handle
 the playlist parsing and segment downloads.
@@ -30,16 +29,11 @@ so that we can then get ffmpeg to do the decryption of the livestream.
 In case of an HLS stream where normally muxing is not required, we force muxing using our own class so that we can again get ffmpeg to
 decrypt the stream with supplied clearkey(s).
 
-This plugin also contains experimental support for HLS muxed streams where PTS timestamps are extracted during a preload for insertion into the FFmpeg muxer.
-Seeks to address the following issue: https://github.com/streamlink/streamlink/issues/4721
-To activate, pass the --hlsdrm-packed-audio argument. Off by default.
-
 Thanks to Titus-AU, whose code is used as a reference and who laid a lot of a groundwork for DRM handling in Streamlink: https://github.com/titus-au
 '''
 
 HLSDRM_OPTIONS = [
-    "decryption-key",
-    "packed-audio"
+    "decryption-key"
 ]
 
 @pluginmatcher(re.compile(r"hlsdrm(?:variant)?://(?P<url>\S+)(?:\s(?P<params>.+))?$"))
@@ -52,11 +46,6 @@ HLSDRM_OPTIONS = [
     "decryption-key",
     type="comma_list",
     help="Decryption key(s) to be passed to ffmpeg."
-)
-@pluginargument(
-    "packed-audio",
-    action="store_true",
-    help="Prereads muxed HLS audio streams to extract PTS values from Apple ID3 tags."
 )
 
 class HLSDRM(Plugin):
@@ -109,7 +98,7 @@ class HLSDRM(Plugin):
             key = k.split(':')
             key_val = key[-1]
             key_len = len(key_val)
-            log.debug("HLSDRM: Decryption Key %s has %s digits", key_val, key_len)
+            log.debug("PROCESSKEYS: Decryption Key %s has %s digits", key_val, key_len)
             
             is_valid_hex = False
             if key_len == 32:
@@ -126,17 +115,19 @@ class HLSDRM(Plugin):
                     decoded_bytes = base64.urlsafe_b64decode(b64_string)
                     
                     if len(decoded_bytes) == 16:
+                        # Handle base64 encoded raw bytes
                         key_val = decoded_bytes.hex()
                     elif len(decoded_bytes) == 32:
+                        # Handle base64 encoded hex strings (e.g. YmQ3ZWVh...)
                         key_val = decoded_bytes.decode('utf-8')
-                        int(key_val, 16)
+                        int(key_val, 16)  # Validate it's hex
                     else:
                         raise ValueError
                 except Exception:
-                    raise FatalPluginError("HLSDRM: Expecting 128bit key in 32 hex digits, or base64 equivalent.")
+                    raise FatalPluginError("PROCESSKEYS: Expecting 128bit key in 32 hex digits, or base64 equivalent.")
                     
             if len(key_val) != 32:
-                raise FatalPluginError("HLSDRM: Expecting 128bit key in 32 hex digits.")
+                raise FatalPluginError("PROCESSKEYS: Expecting 128bit key in 32 hex digits.")
                 
             return_keys.append(key_val)
             
@@ -155,22 +146,21 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
     @classmethod
     def _get_keys(cls, session):
         keys = session.options.get("decryption-key") or []
+        if keys:
+            log.debug("FFMPEGMuxerDRM: Decryption Keys %s", keys)
         return keys
 
     def __init__(self, session, *streams, **options):
-        self.audio_pts = options.pop("audio_pts", None)
         super().__init__(session, *streams, **options)
         # if a decryption key is set, we rebuild the ffmpeg command list
         # to include the key before specifying the input streams
         # after that we append our inputs
-
         keys = self._get_keys(session)
         key = 0
-        input = 0
-
         # begin building a new ffmpeg command list
         old_cmd = self._cmd.copy()
         self._cmd = []
+
         while len(old_cmd) > 0:
             cmd = old_cmd.pop(0)
             if cmd == "-i":
@@ -179,78 +169,24 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
                 self._cmd.extend(['-thread_queue_size', '5120'])
                 # generate presentation timestamps from dts
                 self._cmd.extend(['-fflags', '+genpts'])
-                if input == 1:
-                    # input is audio (always second)
-                    if self.audio_pts is not None:
-                        # set default 90KHz clock for Apple HLS streams
-                        self.audio_clock = 90000
-                        log.debug(f"FFMPEGMuxerDRM: Applying itsoffset of {self.audio_pts/self.audio_clock} to audio input stream")
-                        # apply timestamp offset for packed audio input
-                        self._cmd.extend(['-itsoffset', f'{self.audio_pts/self.audio_clock}'])
+                
                 if keys:
-                    # check for keys and only provide -decryption_key if not None
                     if keys[key] is not None:
                         self._cmd.extend(["-decryption_key", keys[key]])
                     key += 1
+                    # If we had more streams than keys, start with the first audio key again
                     if key == len(keys):
                         key = 1
-                input += 1
                 self._cmd.extend([cmd, _])
             else:
                 self._cmd.append(cmd)
-                
+
+        # pop the last argument (the output pipe, e.g., "pipe:1")
         output_pipe = self._cmd.pop()
+        # ffmpeg output options here if needed
+        # append the output pipe back to the very end
         self._cmd.append(output_pipe)
         log.debug("FFMPEGMuxerDRM: Updated ffmpeg command %s", self._cmd)
-
-class PreReadStream:
-    """
-    A wrapper class that returns the PTS for wrapped audio streams
-    by reading the Apple HLS ID3 tag by pre-reading the stream bytes before
-    falling back to the original file descriptor
-    """
-
-    def __init__(self, fd, pre_data):
-        self.fd = fd
-        self.pre_data = pre_data
-        self.pts = self._extract_pts()
-
-    def _extract_pts(self):
-        # scans the byte buffer for the Apple HLS ID3 tag and extracts the PTS for use in the muxer later
-        if not self.pre_data:
-            return None
-            
-        marker = b"com.apple.streaming.transportStreamTimestamp\x00"
-        idx = self.pre_data.find(marker)
-        
-        if idx == -1:
-            return None
-            
-        start_idx = idx + len(marker)
-        if start_idx + 8 > len(self.pre_data):
-            return None
-            
-        pts_bytes = self.pre_data[start_idx : start_idx + 8]
-        pts = struct.unpack(">Q", pts_bytes)[0]
-        
-        # mask the upper 31 bits per the RFC
-        return pts & 0x1FFFFFFFF
-
-    def read(self, size=-1):
-        if self.pre_data:
-            if size == -1 or size >= len(self.pre_data):
-                data = self.pre_data
-                self.pre_data = b""
-                return data
-            else:
-                data = self.pre_data[:size]
-                self.pre_data = self.pre_data[size:]
-                return data
-        return self.fd.read(size)
-        
-    def close(self):
-        if hasattr(self.fd, 'close'):
-            self.fd.close()
 
 class SingleStreamDRM(Stream):
     """
@@ -266,7 +202,7 @@ class SingleStreamDRM(Stream):
         fmt = self.session.options.get("ffmpeg-fout") or "mpegts"
         copyts = self.session.options.get("ffmpeg-copyts")
         if copyts is None: copyts = True
-        log.debug("Forcing Muxing for single")
+        log.debug("HLSDRM: Forcing Muxing for single")
             
         muxer = FFMPEGMuxerDRM(self.session, reader, format=fmt, copyts=copyts)
         return muxer.open()
@@ -274,45 +210,32 @@ class SingleStreamDRM(Stream):
 class MuxedStreamDRM(Stream):
     """
     Wrapper for invoking the DRM FFmpeg muxer for multi-track hls streams
-    Includes support for extracting PTS value from Apple ID3 tags by prereading the stream
-    before ffmpeg muxer invoked.
+    Delegates to Streamlink's native _open_streams for handling packed audio PTS extraction.
     """
 
     def __init__(self, session, muxed_stream):
         super().__init__(session)
-        self.substreams = muxed_stream.substreams
+        self.muxed_stream = muxed_stream
 
     def open(self):
-        # initialise audio_pts variable
-        audio_pts = None
-
-        if self.session.options.get("packed-audio"):
-            # If packed-audio option specified, open the streams,
-            # read the first 2KB, and let the wrapper extract the PTS
-            # from the id3 tag
-            fds = []
-            for substream in self.substreams:
-                fd = substream.open()
-                try:
-                    chunk = fd.read(2048)
-                    pre_stream = PreReadStream(fd, chunk)
-                    
-                    if pre_stream.pts is not None:
-                        log.debug(f"HLSDRM: Successfully intercepted Audio PTS from raw data: {pre_stream.pts}")
-                        audio_pts = pre_stream.pts
-                        
-                    fds.append(pre_stream)
-                except Exception as e:
-                    log.debug(f"HLSDRM: Failed to pre-read stream data: {e}")
-                    fds.append(fd)
+        # Open substreams using the native _open_streams method (if available)
+        # This will extract the PTS and update self.muxed_stream.options with 'itsoffset'
+        if hasattr(self.muxed_stream, "_open_streams"):
+            fds = self.muxed_stream._open_streams()
         else:
-            fds = [substream.open() for substream in self.substreams]
+            fds = [substream.open() for substream in self.muxed_stream.substreams]
+            
+        options = self.muxed_stream.options.copy()
+            
         fmt = self.session.options.get("ffmpeg-fout") or "mpegts"
         copyts = self.session.options.get("ffmpeg-copyts")
         if copyts is None:
             copyts = True
             
-        muxer = FFMPEGMuxerDRM(self.session, *fds, format=fmt, copyts=copyts, audio_pts=audio_pts)
+        options["format"] = fmt
+        options["copyts"] = copyts
+            
+        muxer = FFMPEGMuxerDRM(self.session, *fds, **options)
         return muxer.open()
     
 __plugin__ = HLSDRM

@@ -30,7 +30,7 @@ from streamlink.stream.http import HTTPStream
 from streamlink.stream.stream import Stream
 from streamlink.options import Options
 
-__version__ = "1.7.7"
+__version__ = "1.7.8"
 
 def parse_args():
     # Initial wrapper arguments
@@ -533,7 +533,6 @@ def detect_streams(session, url, options):
             url = f"dashdrm://{url}"
         elif type == "hls":
             url = f"hlsdrm://{url}"
-            plugin_options.set("packed-audio", True)
         # Match plugin through new URL
         plugin_name, plugin_cls, url = session.resolve_url(url)
         plugin = plugin_cls(session, url, options=plugin_options)
